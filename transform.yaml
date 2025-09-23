@@ -1,0 +1,119 @@
+# phase1 : aggregate and occlude outliers
+# base: meds_final | Out: meds_outliers
+
+
+# input_dir: /scratch/sas10092/ehr-foundation/data/meds_final
+# output_dir: /scratch/sas10092/ehr-foundation/data/meds_outliers
+
+# stages:
+#   # 1) Aggregate stats needed to detect outliers (μ, σ via sums & sums of squares)
+#   - aggregate_code_metadata:
+#       aggregations:
+#         - values/n_occurrences
+#         - values/sum
+#         - values/sum_sqd
+#         - values/min
+#         - values/max
+
+#   # 2) Occlude numeric outliers beyond k·σ (k=3 is a solid default)
+#   - occlude_outliers:
+#       stddev_cutoff: 3
+
+
+
+# phase2 : normalize
+# base: meds_final | Out: meds_outliers
+# note1: ends up with meds columns id, time, code, values/normalized
+# note2: perform to get the normalization stats after  and return to meds outliers where all columns are preserved 
+# note3 (optional): apply the normalization function to the output of this stage in place by looping over the output 
+
+
+# input_dir: /scratch/sas10092/ehr-foundation/data/meds_outliers
+# output_dir: /scratch/sas10092/ehr-foundation/meds_normalized
+
+# stages: 
+#   # 3) Re-aggregate after occlusion (so normalization uses clean stats)
+#   - aggregate_code_metadata:
+#       aggregations:
+#         - values/n_occurrences
+#         - values/sum
+#         - values/sum_sqd
+#         - code/n_occurrences
+#         - code/n_subjects
+#         - values/min
+#         - values/max
+
+#   # 4) Build/refresh the code vocabulary (needed by downstream steps)
+#   - fit_vocabulary_indices
+
+#   # 5) Fit μ, σ on the cleaned data (per code), then apply z = (x-μ)/σ
+#   - fit_normalization:
+#       _base_stage: aggregate_code_metadata
+#       aggregations:
+#         - values/n_occurrences
+#         - values/sum
+#         - values/sum_sqd
+#   - normalization
+
+
+
+# phase3 : create binned numric values
+# base: meds_outliers | Out: meds_binned
+# note1: needs extra round for data aggregation
+
+# input_dir: /scratch/sas10092/ehr-foundation/meds_outliers
+# output_dir: /scratch/sas10092/ehr-foundation/meds_binned
+
+
+# stages:
+#   - aggregate_code_metadata:
+#       # write per-code deciles into metadata/codes.parquet as a struct "values/quantiles"
+#       aggregations:
+#         - { name: values/quantiles, quantiles: [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90] }
+#       train_only: false
+#       # map outputs land here (ok to keep); the reducer writes the merged file to reducer_output_dir
+#       output_dir: ${output_dir}/aggregate_code_metadata
+#       reducer_output_dir: ${output_dir}/metadata
+
+#   - bin_numeric_values:
+#       # read the quantiles we just wrote
+#       metadata_input_dir: ${output_dir}/metadata
+#       # do NOT set bin_with_columns; default is "values/quantiles"
+#       code_with_bin_name: "{code}//[{left},{right})"
+#       do_drop_numeric_value: false
+#       # output binned shards here:
+#       output_dir: ${output_dir}/data
+#       train_only: false
+
+#   - fit_vocabulary_indices
+
+
+# phase4 : create binned numric values
+# base: meds_outliers | Out: meds_binned
+# note1: needs extra round for data aggregation
+
+
+# input_dir: /scratch/sas10092/ehr-foundation/meds_outliers
+# output_dir: /scratch/sas10092/ehr-foundation/meds_binned
+
+
+
+
+# input_dir: /scratch/sas10092/ehr-foundation/meds_cat_val
+# output_dir: /scratch/sas10092/ehr-foundation/meds_cat_val
+
+# stages: 
+#   # 3) Re-aggregate after occlusion (so normalization uses clean stats)
+#   - aggregate_code_metadata:
+#       aggregations:
+#         - values/n_occurrences
+#         - values/sum
+#         - values/sum_sqd
+#         - code/n_occurrences
+#         - code/n_subjects
+#         - values/min
+#         - values/max
+
+
+#   # 4) Build/refresh the code vocabulary (needed by downstream steps)
+#   - fit_vocabulary_indices

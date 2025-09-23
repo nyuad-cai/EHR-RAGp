@@ -1,2 +1,9 @@
 .ipynb_checkpoints/
 data/
+logs/
+data_backup/
+__pycache__/
+lightning_logs/
+ccad-labs-summaries
+toy_label
+toy_tokenizer_artifacts
