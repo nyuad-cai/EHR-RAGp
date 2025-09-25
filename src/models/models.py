@@ -1,4 +1,5 @@
 
+import os
 import torch
 
 
@@ -6,6 +7,10 @@ import lightning as lt
 import torch.nn as nn
 
 from transformers import RoFormerForMaskedLM
+from torchmetrics.classification import Accuracy
+
+
+
 
 class EHREmbeddings(nn.Module):
     def __init__(
@@ -65,7 +70,13 @@ class MLMPretraining(lt.LightningModule):
         super().__init__()
         self.save_hyperparameters()
 
+        self.top_1_train = Accuracy(task="multiclass", num_classes=config.vocab_size, top_k=1,ignore_index=-100)
+        self.top_3_train = Accuracy(task="multiclass", num_classes=config.vocab_size, top_k=3,ignore_index=-100)
+        self.top_5_train = Accuracy(task="multiclass", num_classes=config.vocab_size, top_k=5,ignore_index=-100)
 
+        self.top_1_val = Accuracy(task="multiclass", num_classes=config.vocab_size, top_k=1,ignore_index=-100)
+        self.top_3_val = Accuracy(task="multiclass", num_classes=config.vocab_size, top_k=3,ignore_index=-100)
+        self.top_5_val = Accuracy(task="multiclass", num_classes=config.vocab_size, top_k=5,ignore_index=-100)
 
         self.backbone = RoFormerForMaskedLM(config)
 
@@ -115,20 +126,44 @@ class MLMPretraining(lt.LightningModule):
                             labels=batch["labels"])
         
         loss = out.loss
-#         self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+        preds  = out.logits.view(-1, out.logits.size(-1))
+        target = batch["labels"].view(-1)
+
+        top1 = self.top_1_train(preds, target)
+        top3 = self.top_3_train(preds, target)
+        top5 = self.top_5_train(preds, target)
+        perplexity = torch.exp(loss)
+
+        self.log("train_perplexity", perplexity, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
+        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
+        self.log("train_top1", top1, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
+        self.log("train_top3", top3, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
+        self.log("train_top5", top5, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
         return loss
 
-#     def validation_step(self, batch, batch_idx):
-#         out = self(
-#             input_ids=batch["input_ids"],
-#             attention_mask=batch["attention_mask"],
-#             type_ids=batch["type_ids"],
-#             visit_ids=batch["visit_ids"],
-#             stage_ids=batch["stage_ids"],
-#             labels=batch["labels"],
-#         )
-#         val_loss = out.loss
-#         self.log("val/loss", val_loss, prog_bar=True, on_epoch=True)
+    def validation_step(self, batch, batch_idx):
+        out = self(
+            input_ids=batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            type_ids=batch["type_ids"],
+            visit_ids=batch["visit_ids"],
+            stage_ids=batch["stage_ids"],
+            labels=batch["labels"])
+        
+        loss = out.loss
+        preds  = out.logits.view(-1, out.logits.size(-1))
+        target = batch["labels"].view(-1)
+        
+        top1 = self.top_1_val(preds, target)
+        top3 = self.top_3_val(preds, target)
+        top5 = self.top_5_val(preds, target)
+        perplexity = torch.exp(loss)
+
+        self.log("val_perplexity", perplexity, prog_bar=False, on_step=False, on_epoch=True, sync_dist=True)
+        self.log("val_loss", loss, prog_bar=False, on_step=False, on_epoch=True, sync_dist=True)
+        self.log("val_top1", top1, prog_bar=False, on_step=False, on_epoch=True, sync_dist=True)
+        self.log("val_top3", top3, prog_bar=False, on_step=False, on_epoch=True, sync_dist=True)
+        self.log("val_top5", top5, prog_bar=False, on_step=False, on_epoch=True, sync_dist=True)
 
     def configure_optimizers(self):
 
