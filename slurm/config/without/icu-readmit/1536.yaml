@@ -1,0 +1,72 @@
+task: y_icu_readmit_30
+pooling: mean
+seq_length: 1536
+protocol: random_mean_pooling
+freeze: False
+main_window: within_stay_query
+version: without_retrieval
+backbone_name: Roformer_base
+job_id: ${SLURM_JOB_ID}
+ckpt_path: ""
+# ckpt_path: /scratch/sas10092/ehr-foundation/models/mlm/wandb/run-20251102_115510-Roformer_base_12711500_1536_192_25_maskprob_12.5overlap/files/ckpt/epoch=41-step=627774.ckpt
+
+
+seq_gen:
+  tokenizer_path: /scratch/sas10092/ehr-foundation/vocab.json
+  overlap: 0
+
+dataset:
+  data_path: /scratch/sas10092/ehr-foundation/data/meds_normalized_arrow
+  data_idx_path: /scratch/sas10092/ehr-foundation/downstream_idx.parquet
+
+
+dataloader:
+  batch_size: 16
+  num_workers: 8
+  prefetch_factor: 4  
+
+model:
+  learning_rate: 1.0e-5
+  weight_decay: 0.01
+  max_epochs: 50
+  dropout: 0.0
+
+
+logger:
+  wandb_api_key: 59b6438e0496b3089f91abef35d31dae69b6c009
+  project: MedEHR_Eval
+  entity: nyuad-cai
+  log_dir: /scratch/sas10092/ehr-foundation/models/eval
+
+ckpt_callback:
+  monitor: val_auroc
+  mode: max
+  every_n_epochs: 1
+  save_top_k: 1
+
+early_stopping:
+  monitor: val_auroc
+  min_delta: 0.001
+  mode: max
+  patience: 5
+
+lr_monitor:
+  logging_interval: epoch
+
+trainer:
+  accelerator: gpu
+  devices: auto
+  strategy: auto
+  precision: 16-mixed
+  log_every_n_steps: 1
+  num_sanity_val_steps: 0
+
+
+
+  
+  
+
+
+
+
+

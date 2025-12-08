@@ -1,8 +1,11 @@
+import os
 
 import numpy as np
 import pandas as pd
+import polars as pl
 
 
+from tqdm import tqdm
 from datetime import time, timedelta
 
 
@@ -471,6 +474,43 @@ def add_time_tokens(subject_sequence: pd.DataFrame):
 
 
 
+def get_mortality_labels(data_path: str) -> pl.DataFrame:
+    # TODO: In-ICU moratlity labels 
+    # TODO: time-bound mortality label 24/48
+    pieces = []
+    for file in tqdm(os.listdir(data_path)):
+        data = pl.scan_parquet(os.path.join(data_path,file)).collect()
+        idx = (data.group_by(['subject_id','seq_id'])
+                   .len()
+                   .rename({'len':'n_events'})
+                   .sort(['subject_id'])
+                   .filter(pl.col('seq_id')
+                   .is_nan() == False)
+              )
+        
+        idx = idx.with_columns(pl.lit(file).alias('shard'))
+        
+        died_in_hosp = (data.filter(pl.col('died_in_hosp')
+                            .is_nan() == False)['subject_id',
+                                                'seq_id',
+                                                'died_in_hosp'])
+        one_year_mortality = (data.filter(pl.col('code').str.starts_with('MEDS'))
+                                  .filter((pl.col("time").dt.hour() == 0) & 
+                                          (pl.col("time").dt.minute() == 0) &
+                                          (pl.col("time").dt.second() == 0)
+                                         ).select(pl.col('subject_id'))
+                                   .with_columns(pl.lit(1).alias("one_year_mortality"))
+                    )
+        
+        
+        idx = idx.join(died_in_hosp, on=['subject_id','seq_id'],how='left')
+        idx = idx.join(one_year_mortality, on=['subject_id'],how='left').fill_null(0)
+        idx = idx.with_columns(pl.col(['died_in_hosp','one_year_mortality']).cast(pl.Int64))
+        pieces.append(idx)
 
+
+    df = (pl.concat(pieces, how="vertical").sort('subject_id'))
+
+    return df
 
 

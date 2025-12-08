@@ -4,12 +4,18 @@ import json
 import torch
 import bisect
 
+import numpy as np
 import polars as pl
+
+from torch import nn
 
 from math import ceil
 from pathlib import Path
+from collections import defaultdict
+from datasets import load_from_disk
 from torch.utils.data import Dataset
-from typing import Dict, Iterable, List, Optional, Any, Union, Literal, Tuple
+from sklearn.model_selection import train_test_split
+from typing import Dict, Iterable, List, Optional, Any, Union, Literal, Tuple, Callable
 
 class Tokenizer:
     def __init__(
@@ -172,6 +178,8 @@ class Tokenizer:
 
 
 
+
+
 class SequencesGenerator:
 
 
@@ -182,6 +190,8 @@ class SequencesGenerator:
         overlap: int = 128,
         return_numeric: bool = False,
         return_text: bool = False,
+        return_time: bool = False,
+        return_ids: bool = False,
     ):
 
         self.tokenizer = Tokenizer.load(tokenizer_path)
@@ -189,6 +199,8 @@ class SequencesGenerator:
         self.overlap = overlap
         self.return_numeric = return_numeric
         self.return_text = return_text
+        self.return_time = return_time
+        self.return_ids = return_ids
 
     def encode_sequence(
         self,
@@ -204,11 +216,9 @@ class SequencesGenerator:
           + optional numeric/text streams (+ masks)
         """
         df = timeline
-
-        # --- visit_ids (dense per-timeline integer ids starting at 1) ---
-        # If seq_id exists -> categorical codes as stable ints; otherwise zeros.
+        
         if "seq_id" in df.columns:
-        # unique stable integer ids starting at 1
+
             uniq = df.select(pl.col("seq_id")).unique(maintain_order=True)
             uniq = uniq.with_row_count(name="visit_ids_raw")  # 0..K-1
             df = df.join(uniq, on="seq_id", how="left").with_columns(
@@ -217,12 +227,10 @@ class SequencesGenerator:
         else:
             df = df.with_columns(pl.lit(0).alias("visit_id"))
 
-        # --- stage_ids (first non-null of stage cols) ---
         stage_cols = ["out_id", "er_id", "hadm_id", "icustay_id"]
         present_stages = [c for c in stage_cols if c in df.columns]
         if present_stages:
-            # Compute stage_id = 1..len(present_stages) or 0 if all null
-            # We scan in the stage_cols order and pick the first non-null
+
             expr = pl.lit(0)
             for i, col in enumerate(present_stages, start=1):
                 expr = pl.when(expr.eq(0) & pl.col(col).is_not_null()).then(i).otherwise(expr)
@@ -230,25 +238,22 @@ class SequencesGenerator:
         else:
             df = df.with_columns(pl.lit(0).alias("stage_id"))
 
-        # --- map code_type -> type_id (PAD type=0 already in tokenizer) ---
         df = df.join(
             self.tokenizer.type2id_df,
             on=pl.col("code_type").cast(pl.Categorical),
             how="left",
         ).with_columns(pl.col("type_id").fill_null(0))
 
-        # --- map code -> input_id (PAD=0, UNK fallback handled downstream) ---
         df = df.join(
             self.tokenizer.code2id_df,
             on=pl.col("code").cast(pl.Categorical),
             how="left",
         )
 
-        # Fill unknown codes to UNK (or PAD if no UNK)
+
         unk_id = self.tokenizer.unk_id if self.tokenizer.unk_id is not None else self.tokenizer.pad_id or 0
         df = df.with_columns(pl.col("input_id").fill_null(unk_id))
 
-        # --- TIME-GAP tokens zero out visit_id & stage_id (patient-agnostic) ---
         df = df.with_columns(
             pl.when(pl.col("code").str.starts_with("TIME-GAP//"))
               .then(0)
@@ -260,7 +265,7 @@ class SequencesGenerator:
               .alias("stage_id"),
         )
 
-        # --- Add [CLS] row if requested ---
+
         if add_cls and (self.tokenizer.cls_token is not None):
             cls_row = {
                 "code": self.tokenizer.cls_token,
@@ -270,7 +275,7 @@ class SequencesGenerator:
                 "type_id": self.tokenizer.type2id.get("[CLS]", 0),
                 "input_id": self.tokenizer.cls_id,
             }
-            # Optional numeric/text placeholders
+
             if self.return_numeric:
                 cls_row["numeric_value"] = None
             if self.return_text:
@@ -278,14 +283,14 @@ class SequencesGenerator:
 
             df = pl.concat([pl.DataFrame([cls_row]), df], how="vertical_relaxed")
 
-        # --- extract arrays ---
+
         input_ids = df.get_column("input_id").cast(pl.Int64).to_list()
         type_ids = df.get_column("type_id").cast(pl.Int64).to_list()
         visit_ids = df.get_column("visit_id").cast(pl.Int64).to_list()
         stage_ids = df.get_column("stage_id").cast(pl.Int64).to_list()
         attention_mask = [1] * len(input_ids)
 
-        # --- optional value streams (numeric/text) ---
+
         value_payload = self._build_value_streams(
             df=df,
             max_length=max_length,
@@ -334,7 +339,7 @@ class SequencesGenerator:
             overlap = self.overlap
 
         fields = ["input_ids", "attention_mask", "visit_ids", "stage_ids", "type_ids"]
-        for extra in ("numeric_values", "numeric_mask", "text_values", "text_mask"):
+        for extra in ("numeric_values", "numeric_mask", "text_values", "text_mask", 'time_diff'):
             if extra in timeline and extra not in fields:
                 fields.append(extra)
 
@@ -355,7 +360,7 @@ class SequencesGenerator:
             "numeric_mask": 0,
             "text_values": "",
             "text_mask": 0,
-        }
+            "time_diff":0.0}
 
         chunks = []
         for start in starts:
@@ -427,7 +432,63 @@ class SequencesGenerator:
             out["text_values"] = txt
             out["text_mask"] = txt_mask
 
+            
+        if self.return_time:
+            if "time_diff" in df.columns:
+                df = df.with_columns(pl.col(['time_diff'])).fill_null(0.0)
+                time_diff = df.get_column("time_diff").to_list()
+                time_diff = self._scale_time_deltas(time_diff)
+                time_stamp = df.get_column("time").to_list()
+            else:
+                time_diff = [None] * df.height
+                time_stamp = [None] * df.height
+
+
+            if pad_to_max and max_length is not None and len(time_diff) < max_length:
+                pad_len = max_length - len(time_diff)
+                time_diff += [0] * pad_len
+                time_stamp += [0] * pad_len
+
+
+            out["time_diff"] = time_diff
+            out["time_stamp"] = time_stamp
+            
+        if self.return_ids:
+            if "seq_id" in df.columns:
+                
+                seq_id = df.get_column("seq_id").cast(pl.Int32).to_list()
+                out_id = df.get_column("out_id").cast(pl.Int32).to_list()
+                er_id =  df.get_column("er_id").cast(pl.Int32).to_list()
+                hadm_id = df.get_column("hadm_id").cast(pl.Int32).to_list()
+                icustay_id = df.get_column("hadm_id").cast(pl.Int32).to_list()
+            else:
+                seq_id = [None] * df.height
+                out_id = [None] * df.height
+                er_id =  [None] * df.height
+                hadm_id = [None] * df.height
+                icustay_id = [None] * df.height
+
+            if pad_to_max and max_length is not None and len(time_diff) < max_length:
+                pad_len = max_length - len(time_diff)
+                seq_id += [0] * pad_len
+                out_id += [0] * pad_len
+                er_id += [0] * pad_len
+                hadm_id += [0] * pad_len
+                icustay_id += [0] * pad_len
+
+            out["seq_id"] = seq_id
+            out["out_id"] = out_id
+            out["er_id"] = er_id
+            out["hadm_id"] = hadm_id
+            out["icustay_id"] = icustay_id
+
         return out
+    
+    def _scale_time_deltas(self, deltas_list):
+        deltas = np.asarray(deltas_list, dtype=float)
+        compressed = np.log1p(deltas)              
+        scaled = compressed / np.log(5328.93125)         
+        return scaled.tolist()
 
     @staticmethod
     def _truncate(seq: List[Any], max_length: Optional[int], truncation: str) -> List[Any]:
@@ -440,26 +501,37 @@ class SequencesGenerator:
         if pad_len <= 0:
             return lst
         return lst + [pad_value] * pad_len
-    
+
+
+
+
+
 
 class EHRPretrainDataset(Dataset):
     def __init__(self,
-                 data_path: str,
+                 dataset_path: str,
                  data_idx_path: str,
                  seq_generator: SequencesGenerator,
-                 split: str = 'train') -> None:
+                 needed_cols: list = ['subject_id', 'input_ids', 'attention_mask', 'visit_ids', 'stage_ids', 'type_ids'],
+                 split: str = 'all') -> None:
         
-        self.data_path = data_path
+        hf_dataset = load_from_disk(dataset_path)
+        self.hf_dataset = hf_dataset.flatten_indices().select_columns(needed_cols) \
+                                      .with_format("numpy", columns=needed_cols, output_all_columns=False)
+        
         self.seq_generator = seq_generator
         
+        sids = self.hf_dataset["subject_id"]        
+        self.index = defaultdict(list)
+        for i, sid in enumerate(sids):
+            self.index[sid].append(i)
         
         data_idx =  pl.scan_parquet(data_idx_path).collect()
-        data_idx = data_idx[:4_200]
-        val_split = data_idx.sample(fraction=0.05, seed=24)
-        train_split = data_idx.filter(pl.col('subject_id').is_in(val_split['subject_id'].to_list()) == False)
+        splits = {'all': data_idx,
+                  'train':data_idx.filter(pl.col('split') == 'train'),
+                  'val':  data_idx.filter(pl.col('split') == 'val')}
 
-
-        self.data_idx, self.cum, self.subj = self._get_chunks_count(data_idx= train_split if split=='train' else val_split,
+        self.data_idx, self.cum, self.subj = self._get_chunks_count(data_idx=splits[split],
                                                                     chunk_length=self.seq_generator.chunk_length,
                                                                     overlap=self.seq_generator.overlap)
         
@@ -470,14 +542,15 @@ class EHRPretrainDataset(Dataset):
 
     
     def __getitem__(self,
-                    index: int):
+                    idx: int):
         
 
-        subject_id, chunk_id = self._get_chunk_at_idx(idx=index,
+        subject_id, chunk_id = self._get_chunk_at_idx(idx=idx,
                                                       cumm_sum=self.cum,
                                                       subjects=self.subj)
-        timeline = self._read_timeline(subject_id)
-        timeline_encoded = self.seq_generator.encode_sequence(timeline=timeline)
+        
+
+        timeline_encoded = self.hf_dataset.select(self.index[subject_id])[0]
         chunks = self.seq_generator.get_overlapped_chunks(timeline= timeline_encoded,
                                                           chunk_length= self.seq_generator.chunk_length,
                                                           overlap=self.seq_generator.overlap)
@@ -551,6 +624,11 @@ class EHRPretrainDataset(Dataset):
         i = bisect.bisect_right(cumm_sum, idx)
         left = cumm_sum[i-1] if i > 0 else 0
         return subjects[i], idx - left
+
+
+
+
+
     
 
 
@@ -672,3 +750,310 @@ PROTECTED_TOKENS = [
     "EMERGENCY-START","EMERGENCY-END",
     "ADMISSION-AT-HOSPITAL","ADMISSION-AT-ICU",
     "DISCHARGE-FROM-HOSPITAL","DISCHARGE-FROM-ICU"]
+
+limits = {
+    'within24_query': {512:  ['w24_start_512',  'w24_end_512' ],
+                       1024: ['w24_start_1024', 'w24_end_1024'],
+                       1536: ['w24_start_1536', 'w24_end_1536'],
+                      },
+    
+    'within24_hist_icu': {512: ['wStay_min', 'w24_start_512' ],
+                         1024: ['wStay_min', 'w24_start_1024'],
+                         1536: ['wStay_min', 'w24_start_1536'],
+                      },
+    
+    'within24_hist_full': {512: [ 0, 'w24_start_512' ],
+                          1024: [ 0, 'w24_start_1024'],
+                          1536: [ 0, 'w24_start_1536'],
+                          },
+
+    
+    'within48_query': {512:  ['w48_start_512',  'w48_end_512' ],
+                       1024: ['w48_start_1024', 'w48_end_1024'],
+                       1536: ['w48_start_1536', 'w48_end_1536'],
+                      },
+
+    'within48_hist_icu': {512: ['wStay_min', 'w48_start_512' ],
+                         1024: ['wStay_min', 'w48_start_1024'],
+                         1536: ['wStay_min', 'w48_start_1536']
+                      },
+    
+    'within48_hist_full': {512: [ 0, 'w48_start_512' ],
+                          1024: [ 0, 'w48_start_1024'],
+                          1536: [ 0, 'w48_start_1536']
+                          },
+    
+    'within_stay_query': {512:  ['wStay_start_512',  'wStay_end_512' ],
+                          1024: ['wStay_start_1024', 'wStay_end_1024'],
+                          1536: ['wStay_start_1536', 'wStay_end_1536']
+                         },
+    
+    'within_stay_hist_icu': {512:  ['wStay_min', 'wStay_start_512' ],
+                             1024: ['wStay_min', 'wStay_start_1024'],
+                             1536: ['wStay_min', 'wStay_start_1536'],
+                            },
+    
+    'within_stay_hist_full': {512:  [ 0, 'w48_start_512' ],
+                              1024: [ 0, 'w48_start_1024'],
+                              1536: [ 0, 'w48_start_1536'],
+                             },
+    }
+
+class EvalDataset(Dataset):
+    def __init__(self,
+                 dataset_path: str,
+                 data_idx_path: str,
+                 seq_gen: SequencesGenerator,
+                 limits_dict: dict,
+                 task: str = 'y_mort',
+                 main_window: str = 'within48_query', 
+                 seq_length: int = 512,
+                 use_time: bool = True,
+                 use_numeric: bool = False,
+                 split: str = 'train') -> None:
+        
+        needed_cols = ['subject_id', 'input_ids', 'attention_mask', 
+                       'visit_ids', 'stage_ids', 'type_ids']
+
+        if use_time:
+            needed_cols.append('time_diff')
+        if use_numeric:
+            needed_cols.append('numeric_values')
+            needed_cols.append('numeric_mask')
+        self.start_limit = limits_dict[main_window][seq_length][0]
+        self.end_limit   = limits_dict[main_window][seq_length][1]
+        self.task = task
+        
+        self.seq_gen = seq_gen
+        self.data_idx =  pl.scan_parquet(data_idx_path).collect()
+        self.data_idx =  self.data_idx.filter(pl.col('split') == split)
+        
+        sub_ids = set(self.data_idx.get_column("subject_id").to_list())
+        hf_dataset = load_from_disk(dataset_path)
+
+        
+        hf_dataset = hf_dataset.filter(
+            lambda sids: [sid in sub_ids for sid in sids],
+            batched=True,
+            input_columns="subject_id",
+        )
+
+        # (then continue)
+        self.hf_dataset = (
+            hf_dataset
+            .flatten_indices()
+            .select_columns(needed_cols)
+            .with_format("numpy", columns=needed_cols, output_all_columns=False)
+        )
+        
+        
+        sids = self.hf_dataset["subject_id"]        
+        self.index = defaultdict(list)
+        for i, sid in enumerate(sids):
+            self.index[sid].append(i)
+        
+
+        
+    def __len__(self) -> int:
+        return len(self.data_idx)
+
+
+    
+    def __getitem__(self,
+                    idx: int):
+        
+        stay = self.data_idx[idx]
+        subject_id = stay['subject_id'][0]
+        label = stay[self.task][0]
+       
+        
+        
+        start = stay[self.start_limit][0]
+        end = stay[self.end_limit][0]
+
+        
+        timeline_encoded = self.hf_dataset.select(self.index[subject_id])[0]
+        prediction_window = {k: (v[start:end] if isinstance(v, (list, np.ndarray)) else v) for k, v in timeline_encoded.items()}
+        prediction_window = self.seq_gen.get_overlapped_chunks(prediction_window)
+        prediction_window[0]['label'] = label
+        
+        return prediction_window[0]
+
+
+class EvalCollator:
+    def __init__(self) -> None:
+        pass
+
+    def __call__(self, batch: List[Union[Dict, List[Dict]]]) -> Dict[str, torch.Tensor]:
+        chunks = self._flatten(batch)
+        out = self._stack(chunks)
+
+        # ---- CLEAN NUMERIC VALUES ----
+        if "numeric_values" in out:
+            vals = out["numeric_values"].float()          # [B, L]
+            finite_mask = torch.isfinite(vals)            # True where not NaN/inf
+
+            # if numeric_mask already exists, AND it with finite_mask
+            if "numeric_mask" in out:
+                mask = out["numeric_mask"].bool() & finite_mask
+            else:
+                mask = finite_mask
+
+            # replace NaN/inf with 0.0 (or any neutral value)
+            vals = torch.nan_to_num(vals, nan=0.0, posinf=0.0, neginf=0.0)
+
+            out["numeric_values"] = vals
+            out["numeric_mask"] = mask
+
+#         # ---- OPTIONAL: CLEAN TIME FEATURES TOO ----
+#         if "time_diff" in out:
+#             t = out["time_diff"].float()
+#             t = torch.nan_to_num(t, nan=0.0, posinf=0.0, neginf=0.0)
+#             out["time_diff"] = t
+
+        return out
+
+    def _flatten(self, batch) -> List[Dict]:
+        out: List[Dict] = []
+        for item in batch:
+            if isinstance(item, dict):
+                out.append(item)
+            elif isinstance(item, (list, tuple)):
+                out.extend(item)
+            else:
+                raise TypeError(f"Unexpected item type: {type(item)}")
+        if not out:
+            raise ValueError("Empty batch after normalization.")
+        return out
+
+    def _stack(self, chunks: List[Dict]) -> Dict[str, torch.Tensor]:
+        keys = list(chunks[0].keys())
+        out = {}
+        for k in keys:
+            # Skip known non-numeric or variable-shaped fields
+            if k in ("text_values",):  # add others you don't want to collate
+                continue
+
+            seq_list = []
+            for c in chunks:
+                v = c[k]
+                if isinstance(v, list):
+                    v = [0 if x is None else x for x in v]
+                elif v is None:
+                    v = 0
+                seq_list.append(torch.as_tensor(v))
+            out[k] = torch.stack(seq_list, 0)
+        return out
+
+
+
+# class EHRPretrainDataset(Dataset):
+#     def __init__(self,
+#                  data_path: str,
+#                  data_idx_path: str,
+#                  seq_generator: SequencesGenerator,
+#                  split: str = 'train') -> None:
+        
+#         self.data_path = data_path
+#         self.seq_generator = seq_generator
+        
+        
+#         data_idx =  pl.scan_parquet(data_idx_path).collect()
+#         val_split = data_idx.sample(fraction=0.05, seed=24)
+#         train_split = data_idx.filter(pl.col('subject_id').is_in(val_split['subject_id'].to_list()) == False)
+
+
+#         self.data_idx, self.cum, self.subj = self._get_chunks_count(data_idx= train_split if split=='train' else val_split,
+#                                                                     chunk_length=self.seq_generator.chunk_length,
+#                                                                     overlap=self.seq_generator.overlap)
+        
+        
+#     def __len__(self) -> int:
+#         return self.cum[-1]
+
+
+    
+#     def __getitem__(self,
+#                     index: int):
+        
+
+#         subject_id, chunk_id = self._get_chunk_at_idx(idx=index,
+#                                                       cumm_sum=self.cum,
+#                                                       subjects=self.subj)
+#         timeline = self._read_timeline(subject_id)
+#         timeline_encoded = self.seq_generator.encode_sequence(timeline=timeline)
+#         chunks = self.seq_generator.get_overlapped_chunks(timeline= timeline_encoded,
+#                                                           chunk_length= self.seq_generator.chunk_length,
+#                                                           overlap=self.seq_generator.overlap)
+        
+
+#         return chunks[chunk_id]
+    
+
+#     def _build_dataset_index(self,
+#                              data_path, 
+#                              subject_col="subject_id") -> pl.DataFrame:
+#         pieces = []
+#         for p in os.listdir(data_path):
+#             df = (pl.scan_parquet(os.path.join(data_path,p)).select(subject_col).collect()
+#                     .group_by(subject_col)
+#                     .len()
+#                     .rename({"len": "n_events"})
+#                  )
+#             df = df.with_columns(pl.lit(str(p)).alias("shard"))  # optional
+#             pieces.append(df)
+
+
+#         df = (pl.concat(pieces, how="vertical")
+#                   .group_by([subject_col, "shard"])
+#                   .agg(pl.col("n_events").sum())
+#                   .rename({subject_col:"subject_id"})).sort('subject_id')
+
+#         df = df.filter(pl.col('n_events') >3)
+
+#         return df
+    
+    
+#     def _read_timeline(self,
+#                        subject_id:int) -> pl.DataFrame:
+        
+#         shard = self.data_idx.filter(pl.col('subject_id') == subject_id)['shard'][0]
+
+#         data = pl.scan_parquet(os.path.join(self.data_path,shard),parallel='auto').select(
+#                                             ['subject_id','seq_id','out_id','er_id','hadm_id', 
+#                                              'icustay_id','time','code','numeric_value','code_type',
+#                                              'text_value']).filter(
+#                                               pl.col('subject_id') == subject_id).collect()
+#         return data
+
+    
+#     def _get_chunks_count(self,
+#                           data_idx: pl.DataFrame,
+#                           chunk_length: int,
+#                           overlap: int):
+#         payload  = chunk_length - 1
+#         step     = payload - overlap
+
+#         data_idx = data_idx.with_columns(
+#             pl.col("n_events")
+#               .map_elements(lambda n: 1 if n<=payload else ceil((n-payload)/step)+1,return_dtype=pl.Int32)
+#               .alias("n_chunks")
+#         )
+#         data_idx = data_idx.with_columns(
+#             pl.col("n_chunks").cum_sum().alias("cum_chunks")
+#         )
+
+#         cum  = data_idx["cum_chunks"]   
+#         subj = data_idx["subject_id"]
+#         shards = data_idx['shard']
+#         return data_idx, cum, subj
+
+#     def _get_chunk_at_idx(self,
+#                           cumm_sum: list,
+#                           subjects: list,
+#                           idx: int) -> Tuple[int,int,str]:
+#         i = bisect.bisect_right(cumm_sum, idx)
+#         left = cumm_sum[i-1] if i > 0 else 0
+#         return subjects[i], idx - left
+
+

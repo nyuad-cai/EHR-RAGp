@@ -1,0 +1,83 @@
+# seq_length: 512
+# overlap: 64
+# ckpt_path: /scratch/sas10092/ehr-foundation/models/mlm/wandb/run-20251102_081006-Roformer_base_12710830_512_64_25_maskprob_12.5overlap/files/ckpt/epoch=69-step=631120.ckpt
+# main_window: within24_hist_full
+
+# seq_length: 1024
+# overlap: 128
+# ckpt_path: /scratch/sas10092/ehr-foundation/models/mlm/wandb/run-20251102_081033-Roformer_base_12710831_1024_128_25_maskprob_12.5overlap/files/ckpt/epoch=54-step=554235.ckpt
+# main_window: within24_hist_full
+
+# seq_length: 1536
+# overlap: 192
+# ckpt_path: /scratch/sas10092/ehr-foundation/models/mlm/wandb/run-20251102_115510-Roformer_base_12711500_1536_192_25_maskprob_12.5overlap/files/ckpt/epoch=41-step=627774.ckpt
+# main_window: within24_hist_full
+
+
+
+
+# seq_length: 512
+# overlap: 64
+# ckpt_path: /scratch/sas10092/ehr-foundation/models/mlm/wandb/run-20251102_081006-Roformer_base_12710830_512_64_25_maskprob_12.5overlap/files/ckpt/epoch=69-step=631120.ckpt
+# main_window: within48_hist_full
+
+# seq_length: 1024
+# overlap: 128
+# ckpt_path: /scratch/sas10092/ehr-foundation/models/mlm/wandb/run-20251102_081033-Roformer_base_12710831_1024_128_25_maskprob_12.5overlap/files/ckpt/epoch=54-step=554235.ckpt
+# main_window: within48_hist_full
+
+# seq_length: 1536
+# overlap: 192
+# ckpt_path: /scratch/sas10092/ehr-foundation/models/mlm/wandb/run-20251102_115510-Roformer_base_12711500_1536_192_25_maskprob_12.5overlap/files/ckpt/epoch=41-step=627774.ckpt
+# main_window: within48_hist_full
+
+
+
+# seq_length: 512
+# overlap: 64
+# ckpt_path: /scratch/sas10092/ehr-foundation/models/mlm/wandb/run-20251102_081006-Roformer_base_12710830_512_64_25_maskprob_12.5overlap/files/ckpt/epoch=69-step=631120.ckpt
+# main_window: within_stay_hist_full
+
+# seq_length: 1024
+# overlap: 128
+# ckpt_path: /scratch/sas10092/ehr-foundation/models/mlm/wandb/run-20251102_081033-Roformer_base_12710831_1024_128_25_maskprob_12.5overlap/files/ckpt/epoch=54-step=554235.ckpt
+# main_window: within_stay_hist_full
+
+seq_length: 1536
+overlap: 192
+ckpt_path: /scratch/sas10092/ehr-foundation/models/mlm/wandb/run-20251102_115510-Roformer_base_12711500_1536_192_25_maskprob_12.5overlap/files/ckpt/epoch=41-step=627774.ckpt
+main_window: within_stay_hist_full
+
+
+
+seq_gen:
+  tokenizer_path: /scratch/sas10092/ehr-foundation/vocab.json
+  
+
+dataset:
+  data_path: /scratch/sas10092/ehr-foundation/data/meds_normalized_arrow
+  data_idx_path: /scratch/sas10092/ehr-foundation/downstream_idx.parquet
+  
+embedder:
+  pool: mean
+
+client:
+  path: /scratch/sas10092/ehr-foundation/data/vectordbs/mean/
+
+
+
+
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
