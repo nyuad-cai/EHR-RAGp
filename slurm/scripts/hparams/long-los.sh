@@ -25,9 +25,9 @@ conda activate med-ehr
 set -x
 
 
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/bert.yaml
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/roberta.yaml
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/longformer.yaml
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/big_bird.yaml
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/roformer.yaml
-python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/modernbert.yaml
+# done # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/bert.yaml
+# done # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/roberta.yaml
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/longformer.yaml # continues
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/big_bird.yaml # continues
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/roformer.yaml # continues
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/modernbert.yaml # continues
