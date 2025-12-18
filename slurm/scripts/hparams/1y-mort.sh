@@ -16,13 +16,10 @@
 ##SBATCH  -q nvidia-xxl
 ##SBATCH  --constraint=80g
 
-
-
 eval "$(conda shell.bash hook)"
 conda activate med-ehr
 
 set -x
-
 
 # done # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/bert.yaml
 # done # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/roberta.yaml

@@ -5,8 +5,7 @@ import torch
 
 import lightning as lt
 import torch.nn as nn
-from .utils import Time2Vec
-from transformers import RoFormerModel, RoFormerForMaskedLM
+from .utils import Time2Vec, log_bootstrap_ci_text_percentile
 from torchmetrics.classification import Accuracy, BinaryAUROC, BinaryAveragePrecision
 
 
@@ -504,6 +503,16 @@ class EvalModel(lt.LightningModule):
 
         self.log('test_auroc', auroc, on_epoch=True, logger=True)
         self.log('test_auprc', auprc, on_epoch=True, logger=True)
+
+        log_bootstrap_ci_text_percentile(
+            module=self,
+            y_true=y,
+            y_score=pos_score,
+            prefix="test",
+            num_iter=1000,
+            alpha=0.05,
+            ndigits=3,
+        )
 
         self.test_step_label.clear()
         self.test_step_preds.clear()  

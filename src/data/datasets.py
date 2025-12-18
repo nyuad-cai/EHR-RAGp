@@ -181,8 +181,6 @@ class Tokenizer:
 
 
 class SequencesGenerator:
-
-
     def __init__(
         self,
         tokenizer_path: str,

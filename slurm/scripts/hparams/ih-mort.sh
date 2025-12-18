@@ -9,14 +9,12 @@
 #SBATCH  -e ./slurm/logs/%x.%J.err
 #SBATCH  --gres=gpu:a100:1
 
-##SBATCH -q nvidia-xxl
+#SBATCH -q nvidia-xxl
 ##SBATCH -q shamout
 ##SBATCH -q cair
 
 
 ##SBATCH  --constraint=80g
-
-
 
 
 eval "$(conda shell.bash hook)"
@@ -30,4 +28,4 @@ set -x
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/longformer.yaml # continues
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/big_bird.yaml # continues
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/roformer.yaml # continues
-# python wo_qhparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/modernbert.yaml # continues
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/modernbert.yaml # continues

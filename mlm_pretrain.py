@@ -35,7 +35,7 @@ log_dir = os.getenv('LOG_DIR')
 version = os.getenv('VERSION')
 job_id = os.getenv('SLURM_JOB_ID')
 
-ConfigClass, ModelClass = get_config_and_model_cls(backbone_name)
+
 
 def get_run_dir(wandb_logger):
     run = wandb_logger.experiment
@@ -52,7 +52,7 @@ def get_run_dir(wandb_logger):
 def make_dir(p):
     os.makedirs(p, exist_ok=True)
 
-
+ConfigClass, ModelClass = get_config_and_model_cls(backbone_name)
 
 seq_gen = SequencesGenerator(tokenizer_path= tokenizer_path,
                              chunk_length=args.chunk_length,
