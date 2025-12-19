@@ -11,12 +11,14 @@ from torch.utils.data import DataLoader
 from lightning.pytorch.tuner import Tuner
 from src.models.models import MLMPretraining
 from lightning.pytorch.loggers import WandbLogger
-from src.models.utils import get_config_and_model_cls, fix_roberta_longformer_max_pos
 from lightning.pytorch.utilities import rank_zero_only
+from src.data.baseline_datasets import CausalLMDataCollator
+from src.models.baseline_models import EHRMambaNTPPretraining
+from src.models.utils import get_config_and_model_cls, fix_roberta_longformer_max_pos
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
 from src.data.datasets import SequencesGenerator, EHRPretrainDataset, MLMDataCollator, PROTECTED_TOKENS
 
-parser = argparse.ArgumentParser(description='MLM pretraining command line interface')
+parser = argparse.ArgumentParser(description='pretraining command line interface')
 
 parser.add_argument('--learning-rate', type=float, default=0.00001)
 parser.add_argument('--weight-decay', type=float, default=0.01)
@@ -34,7 +36,7 @@ backbone_name = os.getenv('BACKBONE')
 log_dir = os.getenv('LOG_DIR')
 version = os.getenv('VERSION')
 job_id = os.getenv('SLURM_JOB_ID')
-
+pretrain_mode = os.getenv('PRETRAIN_MODE')
 
 
 def get_run_dir(wandb_logger):
@@ -42,17 +44,16 @@ def get_run_dir(wandb_logger):
     d = getattr(run, "dir", None)
     if callable(d):
         d = d()
-    # If still None, fall back to logger save_dir/version
     if not d:
         base = wandb_logger.save_dir or "."
         d = os.path.join(base, str(wandb_logger.version))
-    return d  # guaranteed string now
+    return d  
 
 @rank_zero_only
 def make_dir(p):
     os.makedirs(p, exist_ok=True)
 
-ConfigClass, ModelClass = get_config_and_model_cls(backbone_name)
+ConfigClass, ModelClass = get_config_and_model_cls(backbone_name,mode=pretrain_mode)
 
 seq_gen = SequencesGenerator(tokenizer_path= tokenizer_path,
                              chunk_length=args.chunk_length,
@@ -70,11 +71,15 @@ val_dataset = EHRPretrainDataset(dataset_path=data_path,
                                  seq_generator=seq_gen,
                                  split='val')
 
-collate_fn = MLMDataCollator(tokenizer=seq_gen.tokenizer,
-                             protected_tokens=PROTECTED_TOKENS,
-                             mask_prob=0.15,
-                             replace_prob=0.8,
-                             random_prob=0.1)
+if pretrain_mode == "mlm":
+
+    collate_fn = MLMDataCollator(tokenizer=seq_gen.tokenizer,
+                                protected_tokens=PROTECTED_TOKENS,
+                                mask_prob=0.15,
+                                replace_prob=0.8,
+                                random_prob=0.1)
+elif pretrain_mode == "causal":
+    collate_fn = CausalLMDataCollator(tokenizer=seq_gen.tokenizer)
 
 train_dataoader = DataLoader(dataset=train_dataset,
                              batch_size=args.batch_size,
@@ -95,32 +100,48 @@ val_dataoader = DataLoader(dataset=val_dataset,
                              prefetch_factor=4)
 
 
-
-cfg = ConfigClass(
-    vocab_size=seq_gen.tokenizer.vocab_size,
-    cls_token_id=seq_gen.tokenizer.cls_id,
-    pad_token_id=seq_gen.tokenizer.pad_id,
-    type_vocab_size=28,
-    visit_vocab_size=102,
-    stage_vocab_size=5,
-    refernece_compile=False,
+if pretrain_mode == "mlm":
+    cfg = ConfigClass(
+        vocab_size=seq_gen.tokenizer.vocab_size,
+        cls_token_id=seq_gen.tokenizer.cls_id,
+        pad_token_id=seq_gen.tokenizer.pad_id,
+        type_vocab_size=28,
+        visit_vocab_size=102,
+        stage_vocab_size=5,
+        refernece_compile=False,
+    )
+elif pretrain_mode == "causal":
+    cfg = ConfigClass(
+        vocab_size=seq_gen.tokenizer.vocab_size,
+        pad_token_id=seq_gen.tokenizer.pad_id,
+        type_vocab_size=28,
+        visit_vocab_size=102,
+        stage_vocab_size=5,
+        use_mambapy=True,
     )
 
 
 cfg = fix_roberta_longformer_max_pos(cfg)
 
-
-model = MLMPretraining(config=cfg,
-                       backbone=ModelClass,
-                       lr=args.learning_rate,
-                       wd=args.weight_decay,
-                       max_epochs=args.max_epochs)
+if pretrain_mode == "causal":
+    model = EHRMambaNTPPretraining(config=cfg,
+                                   backbone=ModelClass,
+                                   lr=args.learning_rate,
+                                   wd=args.weight_decay,
+                                   max_epochs=args.max_epoch,
+                                   )
+elif pretrain_mode == "mlm":    
+    model = MLMPretraining(config=cfg,
+                           backbone=ModelClass,
+                           lr=args.learning_rate,
+                           wd=args.weight_decay,
+                           max_epochs=args.max_epochs)
 
 
 wandb.login(key=wandb_api_key)
 
 wandb_logger = WandbLogger(project='MedEHR_Pretraining',
-                           entity='nyuad-cai',
+                        #    entity='nyuad-cai',
                            save_dir=log_dir,
                            version=f'{backbone_name}_{job_id}_{args.chunk_length}_{args.overlap}_{version}',
                            name=f'{backbone_name}_{job_id}_{args.learning_rate}_{args.chunk_length}_{args.overlap}_{version}',
@@ -129,7 +150,7 @@ wandb_logger = WandbLogger(project='MedEHR_Pretraining',
 
 
 
-run_dir = get_run_dir(wandb_logger)          # <- never None
+run_dir = get_run_dir(wandb_logger)         
 ckpt_dir = os.path.join(run_dir, "ckpt")
 make_dir(ckpt_dir)
 checkpoint_callback = ModelCheckpoint(dirpath=ckpt_dir,

@@ -521,3 +521,29 @@ class REMedGenHPFCollator:
         return out
     
 
+#########################################################
+# EHRMamba model
+#########################################################
+
+class CausalLMDataCollator:
+    def __init__(self, tokenizer):
+        self.tokenizer = tokenizer
+
+    def __call__(self, batch):
+        chunks = []
+        for item in batch:
+            if isinstance(item, dict): chunks.append(item)
+            else: chunks.extend(item)
+
+        keys = [k for k in chunks[0].keys() if k not in ("text_values",)]
+        out = {k: torch.stack([torch.as_tensor(c[k]) for c in chunks], 0) for k in keys}
+
+        labels = out["input_ids"].clone()
+        pad = self.tokenizer.pad_id if self.tokenizer.pad_id is not None else 0
+        labels[labels == pad] = -100
+
+        if self.tokenizer.cls_id is not None:
+            labels[out["input_ids"] == self.tokenizer.cls_id] = -100
+
+        out["labels"] = labels
+        return out

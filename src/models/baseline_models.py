@@ -4,9 +4,13 @@ import torch
 import torch.nn as nn
 import lightning.pytorch as lt
 
+
+from .models import EHREmbeddings
+from torchmetrics import Accuracy
 from typing import Optional, Tuple
 from transformers import AutoModel, AutoConfig
 from .utils import log_bootstrap_ci_text_percentile
+from transformers import MambaForCausalLM, MambaConfig
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torchmetrics.classification import BinaryAUROC, BinaryAveragePrecision
 from transformers.models.roformer.modeling_roformer import RoFormerConfig, RoFormerEncoder
@@ -1101,3 +1105,113 @@ class REMedLightningModule(lt.LightningModule):
         return {"optimizer": opt, "lr_scheduler": sch}
     
 
+
+#########################################################
+# EHRMamba model
+#########################################################
+
+class EHRMambaNTPPretraining(lt.LightningModule):
+    def __init__(
+        self,
+        cfg,
+        backbone, 
+        lr: float = 1e-5,
+        wd: float = 0.001,
+        max_epochs: int = 100,
+        dropout: float = 0.1,
+    ):
+        
+        
+        super().__init__()
+        self.save_hyperparameters(ignore=["backbone"])
+        self.top_1_train = Accuracy(
+            task="multiclass",
+            num_classes=cfg.vocab_size,
+            top_k=1,
+            ignore_index=-100,
+        )
+        self.top_1_val = Accuracy(
+            task="multiclass",
+            num_classes=cfg.vocab_size,
+            top_k=1,
+            ignore_index=-100,
+        )
+
+        self.backbone = backbone(cfg)
+
+        self.ehr_embeddings = EHREmbeddings(
+            vocab_size=cfg.vocab_size,
+            embedding_size=cfg.hidden_size,
+            pad_token_id=cfg.pad_token_id,
+            type_vocab_size=cfg.type_vocab_size,
+            visit_vocab_size=cfg.visit_vocab_size,
+            stage_vocab_size=cfg.stage_vocab_size,
+            dropout=dropout,
+            use_position_embeddings=False,
+            max_position_embeddings=0,
+            use_time=False,
+            use_numeric=False,
+        )
+
+
+        self.backbone.get_input_embeddings().weight = self.ehr_embeddings.tok_emb.weight
+        self.backbone.get_output_embeddings().weight = self.ehr_embeddings.tok_emb.weight
+
+        self.lr = lr
+        self.wd = wd
+        self.max_epochs = max_epochs
+
+    def forward(self, batch):
+        inputs_embeds = self.ehr_embeddings.encode(
+            input_ids=batch["input_ids"],
+            type_ids=batch["type_ids"],
+            visit_ids=batch["visit_ids"],
+            stage_ids=batch["stage_ids"],
+        )
+        return self.backbone(
+            inputs_embeds=inputs_embeds,
+            attention_mask=batch["attention_mask"],
+            labels=batch["labels"],
+        )
+
+    def training_step(self, batch, batch_idx):
+        out = self.forward(batch)
+
+        loss = out.loss
+        logits = out.logits              
+        labels = batch["labels"]         
+
+        preds  = logits[:, :-1, :].contiguous().view(-1, logits.size(-1))
+        target = labels[:,  1: ].contiguous().view(-1)
+
+        top1 = self.top_1_train(preds, target)
+
+        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
+        self.log("train_top1", top1,  prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
+
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        out = self.forward(batch)
+
+        loss = out.loss
+        logits = out.logits              
+        labels = batch["labels"]         
+
+        preds  = logits[:, :-1, :].contiguous().view(-1, logits.size(-1))
+        target = labels[:,  1: ].contiguous().view(-1)
+
+        top1 = self.top_1_train(preds, target)
+        valid = (target != -100).sum()
+        
+        self.log("val_loss", loss, prog_bar=False, on_step=False, on_epoch=True, sync_dist=True)
+        self.log("val_top1", top1,  prog_bar=False, on_step=False, on_epoch=True, sync_dist=True)
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=self.wd)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer=optimizer,
+            eta_min=0,
+            T_max=self.max_epochs,
+        )
+        return {"optimizer": optimizer, "lr_scheduler": scheduler}
