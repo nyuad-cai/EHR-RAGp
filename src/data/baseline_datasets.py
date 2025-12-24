@@ -1,5 +1,6 @@
 
 import torch
+import random
 import numpy as np
 import polars as pl
 from datasets import load_from_disk
@@ -52,16 +53,21 @@ class DescEmbDataset(Dataset):
 
     def __getitem__(self, idx: int):
         row = self.data_idx.row(idx, named=True)
-        subject_id = int(row["subject_id"])
-        icustay_id = int(row["icustay_id"])
-        label = row[self.task]
+        sid = int(row["subject_id"])
+        icu = int(row["icustay_id"])
+        y = row[self.task]
 
-        ex = self.hf_dataset[idx]
+        hf_idx = self._hf_index.get((sid, icu))
+        if hf_idx is None:
+            return None
 
-        events = ex[self.main_window]  
-
-        if self.max_events is not None and len(events) > self.max_events:
+        ex = self.hf_dataset[hf_idx]          
+        events = ex[self.main_window] or []
+        events = [e for e in events if isinstance(e, str) and e.strip()]
+        if self.max_events is not None:
             events = events[: self.max_events]
+        if len(events) == 0:
+            return None
 
         enc = self.tokenizer(
             events,
@@ -72,16 +78,13 @@ class DescEmbDataset(Dataset):
             return_tensors="pt",
         )
 
-        input_ids = enc["input_ids"]         
-        attention_mask = enc["attention_mask"]
-
-        seq_len = torch.tensor(len(events), dtype=torch.long)
-        label = torch.tensor(label, dtype=torch.float)  
-
         return {
-            "input_ids": input_ids,                 
-            "attention_mask": attention_mask,                   
-            "label": label                      
+            "subject_id": sid,
+            "icustay_id": icu,
+            "input_ids": enc["input_ids"].long(),
+            "attention_mask": enc["attention_mask"].long(),
+            "seq_len": torch.tensor(len(events), dtype=torch.long),
+            "label": torch.tensor(float(y), dtype=torch.float32),
         }
     
 
@@ -93,11 +96,11 @@ class DescEmbCollator:
     def __call__(self, batch):
 
 
-        batch = [b for b in batch if b["input_ids"] is not None]
+        batch = [b for b in batch if b is not None]
         if len(batch) == 0:
             return {}
 
-        lengths = [b["input_ids"].shape[0] for b in batch]
+        lengths = [int(b["seq_len"]) for b in batch]
         max_S = max(lengths)
         W = batch[0]["input_ids"].shape[1]
         B = len(batch)
@@ -239,19 +242,101 @@ class GenHPFEvalCollator:
 
         return out
     
+class GenHPFSimCLRDataset(Dataset):
+    def __init__(
+        self,
+        dataset_path: str,
+        data_idx_path: str,
+        split: str = "train",
+        seq_field: str = "within_stay_remed",
+        tokenizer_name: str = "emilyalsentzer/Bio_ClinicalBERT",
+        max_events: int = 511,
+        max_tokens: int = 128,
+        min_events: int = 2,
+        seed: int = 0,
+    ):
+        self.seq_field = seq_field
+        self.max_events = max_events
+        self.max_tokens = max_tokens
+        self.min_events = min_events
+        self.rng = random.Random(seed)
+
+
+        df = pl.scan_parquet(data_idx_path).collect()
+        df = df.filter(pl.col("split") == split)
+        df = df.filter(~pl.col("subject_id").is_in([15409850, 16816440, 18757959]))
+        self.data_idx = df.to_pandas()
+
+
+        hf = load_from_disk(dataset_path)
+        keep = [i for i, s in enumerate(hf["subject_id"]) if int(s) not in [15409850, 16816440, 18757959]]
+        hf = hf.select(keep)
+        self.hf_dataset = hf
+
+        self.key_to_hf_idx: Dict[Tuple[int, int], int] = {
+            (int(s), int(h)): i
+            for i, (s, h) in enumerate(zip(hf["subject_id"], hf["icustay_id"]))
+        }
+
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+
+    def __len__(self) -> int:
+        return len(self.data_idx)
+
+    def _consecutive_slice(self, events: List[str]) -> List[str]:
+        n = len(events)
+
+        if n <= self.max_events:
+            return events
+
+        start = self.rng.randint(0, n - self.max_events)
+        return events[start : start + self.max_events]
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        row = self.data_idx.iloc[idx]
+        key = (int(row["subject_id"]), int(row["icustay_id"]))
+
+        hf_idx = self.key_to_hf_idx.get(key, None)
+        if hf_idx is None:
+            return {"input_ids": None}
+
+        events = self.hf_dataset[hf_idx].get(self.seq_field, None)
+        if not events:
+            return {"input_ids": None}
+
+        events = [e for e in events if isinstance(e, str) and e.strip()]
+        if len(events) < self.min_events:
+            return {"input_ids": None}
+
+        events = self._consecutive_slice(events)
+
+        enc = self.tokenizer(
+            events,
+            padding="max_length",
+            truncation=True,
+            max_length=self.max_tokens,
+            add_special_tokens=True,
+            return_tensors="pt",
+        )
+        return {"input_ids": enc["input_ids"].long()}
+
+
+
 
 class GenHPFSimCLRCollator:
     def __init__(
         self,
         pad_token_id: int,
         mask_token_id: int,
+        cls_token_id: int,          
         mask_prob: float = 0.15,
     ) -> None:
         self.pad_token_id = pad_token_id
         self.mask_token_id = mask_token_id
+        self.cls_token_id = cls_token_id
         self.mask_prob = mask_prob
 
-    def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def __call__(self, batch):
         batch = [b for b in batch if b["input_ids"] is not None]
         if len(batch) == 0:
             return {}
@@ -259,19 +344,17 @@ class GenHPFSimCLRCollator:
         v1s, v2s = [], []
 
         for b in batch:
-            ev = b["input_ids"]
+            ev = b["input_ids"]  
             S = ev.size(0)
             if S <= 1:
-                v1 = ev
-                v2 = ev
+                v1, v2 = ev, ev
             else:
                 mid = S // 2
-                v1 = ev[:mid, :]
-                v2 = ev[mid:, :]
+                v1, v2 = ev[:mid, :], ev[mid:, :]
             v1s.append(v1)
             v2s.append(v2)
 
-        views = v1s + v2s
+        views = v1s + v2s  
 
         sizes = [v.size(0) for v in views]
         B2 = len(views)
@@ -281,25 +364,21 @@ class GenHPFSimCLRCollator:
         collated_input_ids = views[0].new_full(
             (B2, S_max, W), fill_value=self.pad_token_id
         ).long()
-        padding_mask = torch.ones(B2, S_max, dtype=torch.bool)  
+
+        padding_mask = torch.ones(B2, S_max, dtype=torch.bool) 
 
         for i, (v, S_i) in enumerate(zip(views, sizes)):
             collated_input_ids[i, :S_i, :] = v
             padding_mask[i, :S_i] = False
-        
-        b_idx, s_idx = torch.where(padding_mask)
-        collated_input_ids[b_idx, s_idx, 0] = 101
 
+        b_idx, s_idx = torch.where(padding_mask)     # both are 1d, same length
+        collated_input_ids[b_idx, s_idx, 0] = self.cls_token_id
         ids = collated_input_ids
         rand = torch.rand_like(ids, dtype=torch.float32)
-        mask = rand < self.mask_prob
-        mask &= ids != self.pad_token_id
+        mask = (rand < self.mask_prob) & (ids != self.pad_token_id)
         ids[mask] = self.mask_token_id
 
-        return {
-            "input_ids": ids,        
-            "padding_mask": padding_mask,  
-        }
+        return {"input_ids": ids, "padding_mask": padding_mask}
     
 
 #########################################################

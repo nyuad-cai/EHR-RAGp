@@ -3,7 +3,7 @@ import math
 import torch
 import torch.nn as nn
 import lightning.pytorch as lt
-
+import torch.nn.functional as F
 
 from .models import EHREmbeddings
 from torchmetrics import Accuracy
@@ -333,7 +333,8 @@ class GenHPFEncoder(nn.Module):
         dropout: float = 0.1,
         max_token_len: int = 128,
         max_events: int = 511,
-        encoder_only: bool = False 
+        encoder_only: bool = False,
+        ckpt_path: str = None
     ):
         super().__init__()
 
@@ -385,6 +386,23 @@ class GenHPFEncoder(nn.Module):
 
         self.event_layer_norm = nn.LayerNorm(encoder_embed_dim, eps=1e-12)
         self.agg_layer_norm = nn.LayerNorm(agg_embed_dim, eps=1e-12)
+        
+        if ckpt_path:
+            ckpt = torch.load(ckpt_path, map_location="cpu")
+            state_dict = ckpt.get("state_dict", ckpt)
+            
+            cleaned = {}
+            for k, v in state_dict.items():
+                if k.startswith("model.encoder."):
+                    cleaned[k.replace("model.encoder.", "")] = v
+                elif k.startswith("encoder."):
+                    cleaned[k.replace("encoder.", "")] = v
+                else:
+                    cleaned[k] = v
+
+            missing, unexpected = self.load_state_dict(cleaned, strict=False)
+            print(f"missing= \n{missing}")
+            print(f"unexpected= \n{unexpected}")
 
     def forward(
         self,
@@ -660,8 +678,7 @@ class GenHPFDownstreamModule(lt.LightningModule):
             prefix="test",
             num_iter=1000,
             alpha=0.05,
-            ndigits=3,
-        )
+            ndigits=3)
 
         self.test_step_label.clear()
         self.test_step_preds.clear()
@@ -674,6 +691,112 @@ class GenHPFDownstreamModule(lt.LightningModule):
 #             T_max=self.max_epochs,
 #         )
         return {"optimizer": optimizer}#, "lr_scheduler": scheduler}
+    
+
+class GenHPFSimCLRModule(lt.LightningModule):
+    def __init__(
+        self,
+        encoder: GenHPFEncoder,
+        lr: float = 1e-4,
+        wd: float = 0.0,
+        max_epochs: int = 100,
+        temperature: float = 0.1,
+        log_sim_every_n_steps: int = 20,   # <-- add
+    ):
+        super().__init__()
+        self.save_hyperparameters(ignore=["encoder"])
+        self.model = GenHPFSimCLRModel(encoder=encoder)
+        self.lr = lr
+        self.wd = wd
+        self.max_epochs = max_epochs
+        self.temperature = temperature
+        self.log_sim_every_n_steps = log_sim_every_n_steps  # <-- add
+
+    def forward(self, input_ids, padding_mask):
+        return self.model(input_ids=input_ids, padding_mask=padding_mask)
+
+    def _nt_xent_loss(self, z: torch.Tensor) -> torch.Tensor:
+        B2, D = z.shape
+        assert B2 % 2 == 0
+        B = B2 // 2
+
+        z1 = F.normalize(z[:B], dim=1)
+        z2 = F.normalize(z[B:], dim=1)
+        reps = torch.cat([z1, z2], dim=0)                     
+
+        sim = (reps @ reps.T) / self.temperature              
+        diag = torch.eye(2 * B, device=sim.device, dtype=torch.bool)
+        sim = sim.masked_fill(diag, float("-inf"))
+
+        labels = torch.arange(2 * B, device=sim.device)
+        labels = (labels + B) % (2 * B)
+
+        return F.cross_entropy(sim, labels)
+
+    @torch.no_grad()
+    def log_simclr_cosines(self, z: torch.Tensor, prefix="simclr"):
+
+        B2 = z.size(0)
+        assert B2 % 2 == 0
+        B = B2 // 2
+
+        z = F.normalize(z, dim=1)
+        z1, z2 = z[:B], z[B:]
+
+        
+        pos = F.cosine_similarity(z1, z2, dim=1) 
+        pos_mean = pos.mean()
+
+       
+        reps = torch.cat([z1, z2], dim=0)                
+        sim = reps @ reps.T                               
+
+        diag = torch.eye(2*B, device=z.device, dtype=torch.bool)
+        pos_mask = diag.roll(shifts=B, dims=1)            
+        neg_mask = ~(diag | pos_mask)
+
+        neg_mean = sim[neg_mask].mean()
+
+        self.log(f"{prefix}_pos_cos", pos_mean, prog_bar=True, on_step=True, logger=True)
+        self.log(f"{prefix}_neg_cos", neg_mean, prog_bar=True, on_step=True, logger=True)
+
+    def training_step(self, batch, batch_idx):
+        input_ids = batch["input_ids"]
+        padding_mask = batch["padding_mask"]
+
+        z = self.forward(input_ids, padding_mask)
+        self.log_simclr_cosines(z)
+        with torch.no_grad():
+            z0 = F.normalize(z, dim=1)
+            sim = z0 @ z0.T                     
+            sim.fill_diagonal_(float("nan"))    
+            mask = ~torch.isnan(sim)
+            sim_vals = sim[mask]                 
+            self.log("sim_mean", sim_vals.mean(), on_step=True, prog_bar=True)
+            self.log("sim_std",  sim_vals.std(unbiased=False), on_step=True, prog_bar=True)
+        loss = self._nt_xent_loss(z)
+        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True, logger=True)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        input_ids = batch["input_ids"]
+        padding_mask = batch["padding_mask"]
+        z = self.forward(input_ids, padding_mask)
+        self.log_simclr_cosines(z)
+        with torch.no_grad():
+            z0 = F.normalize(z, dim=1)
+            sim = z0 @ z0.T                     
+            sim.fill_diagonal_(float("nan"))    
+            mask = ~torch.isnan(sim)
+            sim_vals = sim[mask]                 
+            self.log("val_sim_mean", sim_vals.mean(), on_step=True, prog_bar=True)
+            self.log("val_sim_std",  sim_vals.std(unbiased=False), on_step=True, prog_bar=True)
+        loss = self._nt_xent_loss(z)
+        self.log("val_loss", loss, prog_bar=True, on_step=True, on_epoch=True, logger=True)
+        return loss
+
+    def configure_optimizers(self):
+        return {"optimizer": torch.optim.Adam(self.parameters(), lr=self.lr)}
     
 #########################################################
 # REMed model
@@ -932,14 +1055,14 @@ class REMedLightningModule(lt.LightningModule):
 
     def __init__(
         self,
-        model,  # REMedWithGenHPF, exposes .remed.set_mode(...)
+        model, 
         lr: float = 1e-5,
         max_epochs: int = 100,
         pos_weight: float = 1.0,
         freeze_encoder: bool = True,
         use_warmup: bool = False,
         warmup_steps: int = 500,
-        num_classes: int = 1,   # <-- ADD BACK
+        num_classes: int = 1,  
     ):
         super().__init__()
         self.save_hyperparameters(ignore=["model"])
@@ -994,7 +1117,7 @@ class REMedLightningModule(lt.LightningModule):
             logits = logits.view(-1)
             loss = self.criterion(logits, y)
         else:
-            # y expected as class indices shape (B,)
+            
             logits = logits.view(y.size(0), -1)
             loss = self.criterion(logits, y.long())
 
@@ -1090,6 +1213,15 @@ class REMedLightningModule(lt.LightningModule):
         p = torch.cat(self.test_step_preds)
         self.log("test_auroc", self.test_auroc(p, y))
         self.log("test_auprc", self.test_auprc(p, y))
+        log_bootstrap_ci_text_percentile(
+            module=self,
+            y_true=y,
+            y_score=p,
+            prefix="test",
+            num_iter=1000,
+            alpha=0.05,
+            ndigits=3)
+
         self.test_step_label.clear()
         self.test_step_preds.clear()
 

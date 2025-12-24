@@ -1,0 +1,24 @@
+task: y_mort
+backbone_name: roberta
+main_window: within48_query
+version: without_retrieval
+job_id: ${SLURM_JOB_ID}
+
+ckpt_path: /scratch/sas10092/ehr-foundation/models/mlm/wandb/run-20251126_174933-roberta_13216221_512_64_15_maskprob_12_5overlap/files/ckpt/epoch=87-step=198352.ckpt
+seq_gen:
+  tokenizer_path: /scratch/sas10092/ehr-foundation/vocab.json
+  seq_length: 512
+  overlap: 0
+
+dataset:
+  data_path: /scratch/sas10092/ehr-foundation/data/meds_normalized_arrow
+  data_idx_path: /scratch/sas10092/ehr-foundation/downstream_idx.parquet
+
+dataloader:
+  batch_size: 64
+
+logger:
+  wandb_api_key: 59b6438e0496b3089f91abef35d31dae69b6c009
+  project: MedEHR_Eval
+  entity: nyuad-cai
+  log_dir: /scratch/sas10092/ehr-foundation/models/eval

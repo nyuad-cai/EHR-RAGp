@@ -13,7 +13,7 @@
 
 ##SBATCH -q nvidia-xxl
 
-#SBATCH -q cair
+##SBATCH -q cair
 
 
 ##SBATCH  --constraint=80g
@@ -31,3 +31,16 @@ set -x
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/icu-readmit/big_bird.yaml # continues
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/icu-readmit/roformer.yaml # continues
 # done # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/icu-readmit/modernbert.yaml
+
+
+# # descemb cls-ft
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/icu-readmit/descemb.yaml --freeze
+
+# # descemb -funetune
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/icu-readmit/descemb.yaml
+
+# genhpf
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/icu-readmit/genhpf.yaml
+
+# remed
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/icu-readmit/remed.yaml

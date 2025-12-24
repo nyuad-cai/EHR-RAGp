@@ -23,10 +23,10 @@ class EHREmbeddings(nn.Module):
         dropout: float = 0.1,
         use_position_embeddings: bool = False,
         max_position_embeddings: int = 0,
-        use_time: bool = True,
+        use_time: bool = False,
         time_in_features: int = 1,
         time_out_features: int = 16,
-        use_numeric: bool = True,
+        use_numeric: bool = False,
         numeric_hidden_size: int = 16,   # <-- small bottleneck for numeric
     ):
         super().__init__()
@@ -562,10 +562,12 @@ class EvalModel(lt.LightningModule):
             "modernbert": "backbone.model.",
             "roformer":   "backbone.roformer.",
             "big_bird":   "backbone.bert.",
+            "mamba":      "backbone.backbone.",
+            "mamba2":     "backbone.backbone.",
         }
         backbone_prefix = prefix_map.get(mt, None)
 
-        DROP_PREFIXES = ["backbone.cls.", "top_1_train.", "top_1_val."]
+        DROP_PREFIXES = ["backbone.cls.", "top_1_train.", "top_1_val.", "backbone.lm_head."]
 
         remapped = {}
         for k, v in sd.items():
@@ -573,7 +575,7 @@ class EvalModel(lt.LightningModule):
                 continue
 
             if k.startswith("ehr_embeddings."):
-                new_k = k                      # matches self.ehr_embeddings.*
+                new_k = k
             elif backbone_prefix and k.startswith(backbone_prefix):
                 new_k = "backbone." + k[len(backbone_prefix):]
             else:

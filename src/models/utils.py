@@ -3,7 +3,7 @@
 import os
 import yaml
 import torch
-
+import wandb
 import torch.nn as nn
 import torch.distributed as dist
 
@@ -192,9 +192,9 @@ def log_bootstrap_ci_text_percentile(
             alpha=alpha,
             ndigits=ndigits,
         )
-        try:
-            module.log(f"{prefix}_auroc_ci", auroc_ci_text, logger=True, rank_zero_only=True)
-            module.log(f"{prefix}_auprc_ci", auprc_ci_text, logger=True, rank_zero_only=True)
-        except:
-            print(f'AUROC= {auroc_ci_text}')
-            print(f'AUPRC= {auprc_ci_text}')
+
+        # Use wandb.log directly for string-based CI values
+        wandb.log({
+            f"{prefix}_auroc_ci": auroc_ci_text,
+            f"{prefix}_auprc_ci": auprc_ci_text,
+        }, commit=False)

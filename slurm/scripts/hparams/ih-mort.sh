@@ -29,3 +29,17 @@ set -x
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/big_bird.yaml # continues
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/roformer.yaml # continues
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/modernbert.yaml # continues
+
+
+
+# # descemb cls-ft
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/descemb.yaml --freeze
+
+# # descemb -funetune
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/descemb.yaml
+
+# genhpf
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/genhpf.yaml
+
+# remed
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/remed.yaml

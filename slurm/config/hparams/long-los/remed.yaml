@@ -1,0 +1,39 @@
+task: y_los_7
+backbone_name: remed
+main_window: within24_remed
+time_field: within24_remed_time
+time_diff_field: within24_remed_time_diff
+pred_time: 24
+version: baslines
+job_id: ${SLURM_JOB_ID}
+ckpt_path: null 
+
+dataset:
+  data_path: /scratch/sas10092/ehr-foundation/data/desc_gen_dataset
+  data_idx_path: /scratch/sas10092/ehr-foundation/downstream_idx.parquet
+
+dataloader:
+  batch_size: 64
+
+logger:
+  wandb_api_key: 59b6438e0496b3089f91abef35d31dae69b6c009
+  project: MedEHR_Eval
+  entity: nyuad-cai
+  log_dir: /scratch/sas10092/ehr-foundation/models/hparams
+
+
+
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
