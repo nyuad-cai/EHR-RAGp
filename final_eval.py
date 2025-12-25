@@ -380,6 +380,13 @@ early_stop = EarlyStopping(monitor='val_loss',
 lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
 torch.set_float32_matmul_precision('high')
+
+if torch.cuda.is_available():
+    major, minor = torch.cuda.get_device_capability()
+    
+    precision = "bf16-mixed" if major >= 8 else "16-mixed"
+else:
+    precision = '32-true'
 trainer = lt.Trainer(accelerator='auto', 
                     devices='auto',
                     strategy='auto',
@@ -387,7 +394,7 @@ trainer = lt.Trainer(accelerator='auto',
                     log_every_n_steps=1,
                     num_sanity_val_steps=0,
                     max_epochs=75,
-                    precision='16-mixed', 
+                    precision=precision, 
                     callbacks=[early_stop,lr_monitor,checkpoint_callback]
                     )
 trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)

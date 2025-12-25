@@ -1,0 +1,45 @@
+task: y_icu_readmit_30
+backbone_name: bert
+variant: medbert
+main_window: within_stay_query
+version: without_retrieval
+job_id: ${SLURM_JOB_ID}
+pooling: cls
+use_time: False
+use_numeric: False
+ckpt_path: /scratch/sas10092/ehr-foundation/models/mlm/wandb/run-20251223_063952-bert_medbert_13609306_512_0_15_maskprob_12_5overlap/files/ckpt/epoch=91-step=373152.ckpt
+seq_gen:
+  tokenizer_path: /scratch/sas10092/ehr-foundation/vocab.json
+  seq_length: 512
+  overlap: 0
+
+dataset:
+  data_path: /scratch/sas10092/ehr-foundation/data/meds_normalized_arrow
+  data_idx_path: /scratch/sas10092/ehr-foundation/downstream_idx.parquet
+
+dataloader:
+  batch_size: 64
+
+logger:
+  wandb_api_key: 59b6438e0496b3089f91abef35d31dae69b6c009
+  project: MedEHR_Eval
+  entity: nyuad-cai
+  log_dir: /scratch/sas10092/ehr-foundation/models/hparams
+
+
+
+
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+

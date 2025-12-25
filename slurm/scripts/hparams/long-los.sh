@@ -11,7 +11,7 @@
 
 ##SBATCH -q nvidia-xxl
 ##SBATCH -q shamout
-##SBATCH -q cair
+#SBATCH -q cair
 
 
 ##SBATCH  --constraint=80g
@@ -45,3 +45,21 @@ set -x
 
 # remed
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/remed.yaml
+
+
+
+# med-bert
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/medbert.yaml
+
+# cehrbert
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/cehrbert.yaml
+
+# behrt
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/behrt.yaml
+
+# hibehrt
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/hibehrt.yaml
+
+
+# ehrmaba
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/ehrmamba.yaml

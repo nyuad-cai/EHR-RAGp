@@ -1,10 +1,15 @@
-task: y_mort
+task: y_los_7
 backbone_name: bert
-main_window: within48_query
+variant: medbert
+main_window: within24_query
 version: without_retrieval
 job_id: ${SLURM_JOB_ID}
 
-ckpt_path: /scratch/sas10092/ehr-foundation/models/mlm/wandb/run-20251126_085359-bert_13173456_512_64_15_maskprob_12_5overlap/files/ckpt/epoch=85-step=193844.ckpt
+pooling: cls
+use_time: False
+use_numeric: False
+
+ckpt_path: /scratch/sas10092/ehr-foundation/models/mlm/wandb/run-20251223_063952-bert_medbert_13609306_512_0_15_maskprob_12_5overlap/files/ckpt/epoch=91-step=373152.ckpt
 seq_gen:
   tokenizer_path: /scratch/sas10092/ehr-foundation/vocab.json
   seq_length: 512
@@ -22,6 +27,7 @@ logger:
   project: MedEHR_Eval
   entity: nyuad-cai
   log_dir: /scratch/sas10092/ehr-foundation/models/hparams
+
 
 
 

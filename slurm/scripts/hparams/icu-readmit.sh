@@ -9,7 +9,7 @@
 #SBATCH  -e ./slurm/logs/%x.%J.err
 #SBATCH  --gres=gpu:a100:1
 
-##SBATCH -q shamout
+#SBATCH -q shamout
 
 ##SBATCH -q nvidia-xxl
 
@@ -44,3 +44,21 @@ set -x
 
 # remed
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/icu-readmit/remed.yaml
+
+
+
+# med-bert
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/icu-readmit/medbert.yaml
+
+# cehrbert
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/icu-readmit/cehrbert.yaml
+
+# behrt
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/icu-readmit/behrt.yaml
+
+# hibehrt
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/icu-readmit/hibehrt.yaml
+
+
+# ehrmaba
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/icu-readmit/ehrmamba.yaml

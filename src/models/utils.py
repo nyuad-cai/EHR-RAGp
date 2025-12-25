@@ -8,34 +8,79 @@ import torch.nn as nn
 import torch.distributed as dist
 
 from typing import Callable
+from transformers import BertConfig
 from torchmetrics.classification import BinaryAUROC, BinaryAveragePrecision
 from transformers import CONFIG_MAPPING, MODEL_FOR_MASKED_LM_MAPPING, MODEL_MAPPING, MODEL_FOR_CAUSAL_LM_MAPPING
 
 
-def get_config_and_model_cls(model_type: str, mode: str = "mlm"):
-    assert mode in ["mlm", "eval", "causal"], "mode must be 'mlm', 'eval', or 'causal'"
+
+
+BERT_VARIANTS = {
+    "bert": {},
+    "medbert": dict(
+        hidden_size=192,
+        intermediate_size=64,
+        num_attention_heads=6,
+        num_hidden_layers=6,
+        hidden_dropout_prob=0.1,
+        attention_probs_dropout_prob=0.1,
+    ),
+
+    "cehrbert": dict(
+        hidden_size=128,
+        intermediate_size=2048,
+        num_hidden_layers=12,
+        num_attention_heads=8,
+        hidden_dropout_prob=0.1,
+        attention_probs_dropout_prob=0.1,
+    ),
+
+    "behrt": dict(
+        hidden_size=288,
+        intermediate_size=512,
+        num_attention_heads=12,
+        num_hidden_layers=6,
+        hidden_dropout_prob=0.1,
+        attention_probs_dropout_prob=0.1,
+    ),
+
+    "hibehrt": dict(
+        hidden_size=150,
+        intermediate_size=108,
+        num_attention_heads=6,
+        num_hidden_layers=4,
+        hidden_dropout_prob=0.2,
+        attention_probs_dropout_prob=0.3,
+    ),
+}
+
+
+
+def get_config_and_model_cls(model_type: str, mode: str = "mlm", variant: str = None):
+    assert mode in ["mlm", "eval", "causal"]
 
     if model_type not in CONFIG_MAPPING:
         raise ValueError(f"Unknown model_type: {model_type}")
 
-    config_cls = CONFIG_MAPPING[model_type]  # e.g. BertConfig, MambaConfig
+    config_cls = CONFIG_MAPPING[model_type]
 
     if mode == "mlm":
-        if config_cls not in MODEL_FOR_MASKED_LM_MAPPING:
-            raise ValueError(f"No MaskedLM model registered for config: {config_cls}")
-        model_cls = MODEL_FOR_MASKED_LM_MAPPING[config_cls]  # e.g. BertForMaskedLM
-
+        model_cls = MODEL_FOR_MASKED_LM_MAPPING[config_cls]
     elif mode == "eval":
-        if config_cls not in MODEL_MAPPING:
-            raise ValueError(f"No base model registered for config: {config_cls}")
-        model_cls = MODEL_MAPPING[config_cls]  # e.g. BertModel, MambaModel
+        model_cls = MODEL_MAPPING[config_cls]
+    else:
+        model_cls = MODEL_FOR_CAUSAL_LM_MAPPING[config_cls]
 
-    elif mode == "causal":
-        if config_cls not in MODEL_FOR_CAUSAL_LM_MAPPING:
-            raise ValueError(f"No CausalLM model registered for config: {config_cls}")
-        model_cls = MODEL_FOR_CAUSAL_LM_MAPPING[config_cls]  # e.g. MambaForCausalLM
+    variant_kwargs = {}
+    if variant is not None and issubclass(config_cls, BertConfig):
+        variant_kwargs = BERT_VARIANTS.get(variant, {})
+        if variant not in BERT_VARIANTS:
+            raise ValueError(f"Unknown BERT variant: {variant}")
 
-    return config_cls, model_cls
+    def build_config(**kwargs):
+        return config_cls(**variant_kwargs, **kwargs)
+
+    return build_config, model_cls
 
 
 def fix_roberta_longformer_max_pos(cfg):

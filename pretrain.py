@@ -98,38 +98,7 @@ if pretrain_mode in ["mlm","causal"]:
                           stage_vocab_size=5,
                           refernece_compile=False,
 
-                        # # med-bert params lr 5e-5
-                        # hidden_size= 192,
-                        # intermediate_size= 64,
-                        # num_attention_heads=6,
-                        # num_hidden_layers= 6,
-                        # hidden_dropout_prob= 0.1,
-                        # attention_probs_dropout_prob= 0.1,  
-
-                        # # cehr-bert params lr 2e-4
-                        # hidden_size= 128,
-                        # intermediate_size= 2048,
-                        # num_hidden_layers= 12,
-                        # num_attention_heads= 8,
-                        # hidden_dropout_prob= 0.1,
-                        # attention_probs_dropout_prob= 0.1,
-
-
-                        # # behrt params lr 5e-5
-                        # hidden_size= 288,
-                        # intermediate_size= 512,
-                        # num_attention_heads= 12,
-                        # num_hidden_layers= 6,
-                        # hidden_dropout_prob= 0.1,
-                        # attention_probs_dropout_prob= 0.1,
-
-                        # # hi-behrt params 5e-5
-                        # hidden_size= 150,
-                        # intermediate_size= 108,
-                        # num_attention_heads= 6,
-                        # num_hidden_layers= 4,
-                        # hidden_dropout_prob= 0.2,
-                        # attention_probs_dropout_prob= 0.3
+           #TODO: update for bertvariants
         )
     elif pretrain_mode == "causal":
         cfg = ConfigClass(vocab_size=seq_gen.tokenizer.vocab_size,

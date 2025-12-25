@@ -32,17 +32,24 @@ parser.add_argument('--freeze', action='store_true')
 args = parser.parse_args()
 config = load_config_with_env(args.config_path)
 
-mode = 'cls-ft' if args.freeze else 'bert-ft'
+if config['backbone_name'] == 'descemb':
+    mode = 'descemb-ft' if args.freeze else 'descemb-ft'
+elif config.get('variant') is not None:
+    mode = config['variant']
+else:
+    mode = 'hparams-opt'
+
 
 def objective(trial: optuna.trial.Trial) -> float:
     
     try:
-        if config['backbone_name'] in ['roberta','longformer','big_bird','roformer','modernbert']:
-            ConfigClass, ModelClass = get_config_and_model_cls(config['backbone_name'], mode='eval')
+        if config['backbone_name'] in ['bert','roberta','longformer','big_bird','roformer','modernbert']:
+            ConfigClass, ModelClass = get_config_and_model_cls(config['backbone_name'], mode='eval', 
+                                                               variant=config['variant'] if 'variant' in config else None)
             learning_rate = trial.suggest_float("learning_rate", 1e-5, 5e-4)
             weight_decay = trial.suggest_float("weight_decay", 1e-3, 1e-2)
-            pooling = False#trial.suggest_categorical("pooling",['cls','mean'])
-            use_numeric = False#trial.suggest_categorical("use_numeric", [True, False])
+            pooling = config['pooling'] if 'pooling' in config else trial.suggest_categorical("pooling",['cls','mean'])
+            use_numeric = config['use_numeric'] if 'use_numeric' in config else trial.suggest_categorical("use_numeric", [True, False])
             seq_gen = SequencesGenerator(tokenizer_path=config['seq_gen']['tokenizer_path'],
                                             chunk_length=config['seq_gen']['seq_length'],
                                             overlap=config['seq_gen']['overlap'])
@@ -58,8 +65,8 @@ def objective(trial: optuna.trial.Trial) -> float:
                                         limits_dict=limits,
                                         main_window=config['main_window'],
                                         task=config['task'],
-                                        use_time=False,
-                                        use_numeric=use_numeric,
+                                        use_time=config['use_time'] if 'use_time' in config else True,
+                                        use_numeric=config['use_numeric'] if 'use_numeric' in config else use_numeric,
                                         split='train')
             val_dataset = EvalDataset(dataset_path=config['dataset']['data_path'],
                                         data_idx_path=config['dataset']['data_idx_path'],
@@ -68,25 +75,10 @@ def objective(trial: optuna.trial.Trial) -> float:
                                         limits_dict=limits,
                                         main_window=config['main_window'],
                                         task=config['task'],
-                                        use_time=True,
-                                        use_numeric=use_numeric,
+                                        use_time=config['use_time'] if 'use_time' in config else True,
+                                        use_numeric=config['use_numeric'] if 'use_numeric' in config else use_numeric,
                                         split='val')
-            train_dataloader = DataLoader(dataset=train_dataset,
-                                        batch_size=config['dataloader']['batch_size'],
-                                        num_workers=8,
-                                        shuffle=True,
-                                        collate_fn=collate_fn,
-                                        pin_memory=True,
-                                        persistent_workers=True,
-                                        prefetch_factor=4)
-            val_dataloader = DataLoader(dataset=val_dataset,
-                                        batch_size=config['dataloader']['batch_size'],
-                                        num_workers=8,
-                                        shuffle=False,
-                                        collate_fn=collate_fn,
-                                        pin_memory=True,
-                                        persistent_workers=True,
-                                        prefetch_factor=4)
+
             cfg = ConfigClass(
                 vocab_size=seq_gen.tokenizer.vocab_size,
                 cls_token_id=seq_gen.tokenizer.cls_id,
@@ -94,8 +86,8 @@ def objective(trial: optuna.trial.Trial) -> float:
                 type_vocab_size=28,
                 visit_vocab_size=102,
                 stage_vocab_size=5,
-                refernece_compile=False,
-                )
+                refernece_compile=False)
+
             cfg = fix_roberta_longformer_max_pos(cfg)
             model = EvalModel(config=cfg,
                             backnone=ModelClass,
@@ -105,11 +97,11 @@ def objective(trial: optuna.trial.Trial) -> float:
                             max_epochs=75,
                             pooling=pooling,
                             use_numeric=use_numeric,
-                            use_time=True,
+                            use_time=config['use_time'] if 'use_time' in config else True,
                             freeze=False,
                             optimizer='sgd')
 
-
+        
 
         elif config['backbone_name'] == 'descemb':
             learning_rate = trial.suggest_float("learning_rate", 1e-5, 5e-4)
@@ -132,22 +124,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                                         max_events=511,
                                         split='val') 
             collate_fn = DescEmbCollator(pad_token_id=train_dataset.tokenizer.pad_token_id)
-            train_dataloader = DataLoader(dataset=train_dataset,
-                                        batch_size=config['dataloader']['batch_size'],
-                                        num_workers=8,
-                                        shuffle=True,
-                                        collate_fn=collate_fn,
-                                        pin_memory=True,
-                                        persistent_workers=True,
-                                        prefetch_factor=4)
-            val_dataloader = DataLoader(dataset=val_dataset,
-                                        batch_size=config['dataloader']['batch_size'],
-                                        num_workers=8,
-                                        shuffle=False,
-                                        collate_fn=collate_fn,
-                                        pin_memory=True,
-                                        persistent_workers=True,
-                                        prefetch_factor=4)
+
             cfg = SimpleNamespace(bert_model_name="google/bert_uncased_L-2_H-128_A-2",
                                   pred_embed_dim=128,
                                   pred_hidden_dim=256,     
@@ -185,22 +162,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                 max_events=511,
                 max_tokens=64)
             collate_fn = GenHPFEvalCollator(pad_token_id=train_dataset.tokenizer.pad_token_id)
-            train_dataloader = DataLoader(dataset=train_dataset,
-                                        batch_size=config['dataloader']['batch_size'],
-                                        num_workers=8,
-                                        shuffle=True,
-                                        collate_fn=collate_fn,
-                                        pin_memory=True,
-                                        persistent_workers=True,
-                                        prefetch_factor=4)
-            val_dataloader = DataLoader(dataset=val_dataset,
-                                        batch_size=config['dataloader']['batch_size'],
-                                        num_workers=8,
-                                        shuffle=False,
-                                        collate_fn=collate_fn,
-                                        pin_memory=True,
-                                        persistent_workers=True,
-                                        prefetch_factor=4)
+
 
             encoder = GenHPFEncoder(vocab_size=train_dataset.tokenizer.vocab_size,
                                     pad_token_id=train_dataset.tokenizer.pad_token_id,
@@ -238,7 +200,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                                                    label_field=config['task'],
                                                    split='train',
                                                    tokenizer_name="emilyalsentzer/Bio_ClinicalBERT",
-                                                   seq_len=512,
+                                                   seq_len=511,
                                                    max_tokens=64)
             val_dataset = REMedGenHPFPoolDataset(hf_path=config['dataset']['data_path'],
                                                    data_idx_path=config['dataset']['data_idx_path'],
@@ -248,25 +210,9 @@ def objective(trial: optuna.trial.Trial) -> float:
                                                    label_field=config['task'],
                                                    split='val',
                                                    tokenizer_name="emilyalsentzer/Bio_ClinicalBERT",
-                                                   seq_len=512,
+                                                   seq_len=511,
                                                    max_tokens=64)
             collate_fn = REMedGenHPFCollator(pad_token_id=train_dataset.tokenizer.pad_token_id)
-            train_dataloader = DataLoader(dataset=train_dataset,
-                                        batch_size=config['dataloader']['batch_size'],
-                                        num_workers=8,
-                                        shuffle=True,
-                                        collate_fn=collate_fn,
-                                        pin_memory=True,
-                                        persistent_workers=True,
-                                        prefetch_factor=4)
-            val_dataloader = DataLoader(dataset=val_dataset,
-                                        batch_size=config['dataloader']['batch_size'],
-                                        num_workers=8,
-                                        shuffle=False,
-                                        collate_fn=collate_fn,
-                                        pin_memory=True,
-                                        persistent_workers=True,
-                                        prefetch_factor=4)
             encoder = GenHPFEncoder(vocab_size=train_dataset.tokenizer.vocab_size,
                                     pad_token_id=train_dataset.tokenizer.pad_token_id,
                                     encoder_embed_dim=128,
@@ -277,9 +223,9 @@ def objective(trial: optuna.trial.Trial) -> float:
                                     agg_layers=4,
                                     agg_ffn_embed_dim=512,
                                     agg_attention_heads=4,
-                                    dropout=dropout,
+                                    dropout=0.2,
                                     max_token_len=64,   
-                                    max_events=512,
+                                    max_events=511,
                                     encoder_only=True,
                                     ckpt_path=config['ckpt_path'])
             remed_genhpf = REMedWithGenHPF(genhpf_encoder=encoder,
@@ -289,7 +235,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                                            max_retrieve_len=128,
                                            n_heads=8,
                                            n_layers=2,
-                                           dropout=dropout,
+                                           dropout=0.2,
                                            freeze_encoder=True)
             model = REMedLightningModule(model=remed_genhpf,
                                          lr=learning_rate,
@@ -298,7 +244,24 @@ def objective(trial: optuna.trial.Trial) -> float:
                                          freeze_encoder=True,
                                          use_warmup=True,
                                          warmup_steps=500,
-                                         num_classes=1)     
+                                         num_classes=1)
+
+        train_dataloader = DataLoader(dataset=train_dataset,
+                                    batch_size=config['dataloader']['batch_size'],
+                                    num_workers=8,
+                                    shuffle=True,
+                                    collate_fn=collate_fn,
+                                    pin_memory=True,
+                                    persistent_workers=True,
+                                    prefetch_factor=4)
+        val_dataloader = DataLoader(dataset=val_dataset,
+                                    batch_size=config['dataloader']['batch_size'],
+                                    num_workers=8,
+                                    shuffle=False,
+                                    collate_fn=collate_fn,
+                                    pin_memory=True,
+                                    persistent_workers=True,
+                                    prefetch_factor=4)     
 
         wandb.login(key=config['logger']['wandb_api_key'])
 
@@ -318,6 +281,13 @@ def objective(trial: optuna.trial.Trial) -> float:
         lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
         torch.set_float32_matmul_precision('high')
+
+        if torch.cuda.is_available():
+            major, minor = torch.cuda.get_device_capability()
+            
+            precision = "bf16-mixed" if major >= 8 else "16-mixed"
+        else:
+            precision = '32-true'
         trainer = lt.Trainer(accelerator='auto', 
                             devices='auto',
                             strategy='auto',
@@ -325,7 +295,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                             log_every_n_steps=1,
                             num_sanity_val_steps=0,
                             max_epochs=75,
-                            precision='16-mixed', 
+                            precision=precision,
                             callbacks=[early_stop,lr_monitor],
                             enable_checkpointing=False
                             )

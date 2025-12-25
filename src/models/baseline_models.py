@@ -1226,7 +1226,7 @@ class REMedLightningModule(lt.LightningModule):
         self.test_step_preds.clear()
 
     def configure_optimizers(self):
-        opt = torch.optim.SGD(self.parameters(), lr=self.hparams.lr)
+        opt = torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
 
         if self.hparams.use_warmup:
             sch = torch.optim.lr_scheduler.LinearLR(
