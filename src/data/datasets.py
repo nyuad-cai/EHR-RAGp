@@ -704,16 +704,10 @@ class MLMDataCollator:
 
     def _mask_batch(
         self,
-        input_ids: torch.Tensor,      # (B, L)
-        attention_mask: torch.Tensor  # (B, L)
+        input_ids: torch.Tensor,      
+        attention_mask: torch.Tensor  
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Vectorized BERT-style masking:
-        • 80% -> [MASK]
-        • 10% -> random token (not protected)
-        • 10% -> keep original
-        Returns masked_input_ids, labels.
-        """
+
         device = input_ids.device
         prot = self.protected_ids.to(device)
         eligible = attention_mask.bool() & (~prot[input_ids])
@@ -944,114 +938,5 @@ class EvalCollator:
         return out
 
 
-
-# class EHRPretrainDataset(Dataset):
-#     def __init__(self,
-#                  data_path: str,
-#                  data_idx_path: str,
-#                  seq_generator: SequencesGenerator,
-#                  split: str = 'train') -> None:
-        
-#         self.data_path = data_path
-#         self.seq_generator = seq_generator
-        
-        
-#         data_idx =  pl.scan_parquet(data_idx_path).collect()
-#         val_split = data_idx.sample(fraction=0.05, seed=24)
-#         train_split = data_idx.filter(pl.col('subject_id').is_in(val_split['subject_id'].to_list()) == False)
-
-
-#         self.data_idx, self.cum, self.subj = self._get_chunks_count(data_idx= train_split if split=='train' else val_split,
-#                                                                     chunk_length=self.seq_generator.chunk_length,
-#                                                                     overlap=self.seq_generator.overlap)
-        
-        
-#     def __len__(self) -> int:
-#         return self.cum[-1]
-
-
-    
-#     def __getitem__(self,
-#                     index: int):
-        
-
-#         subject_id, chunk_id = self._get_chunk_at_idx(idx=index,
-#                                                       cumm_sum=self.cum,
-#                                                       subjects=self.subj)
-#         timeline = self._read_timeline(subject_id)
-#         timeline_encoded = self.seq_generator.encode_sequence(timeline=timeline)
-#         chunks = self.seq_generator.get_overlapped_chunks(timeline= timeline_encoded,
-#                                                           chunk_length= self.seq_generator.chunk_length,
-#                                                           overlap=self.seq_generator.overlap)
-        
-
-#         return chunks[chunk_id]
-    
-
-#     def _build_dataset_index(self,
-#                              data_path, 
-#                              subject_col="subject_id") -> pl.DataFrame:
-#         pieces = []
-#         for p in os.listdir(data_path):
-#             df = (pl.scan_parquet(os.path.join(data_path,p)).select(subject_col).collect()
-#                     .group_by(subject_col)
-#                     .len()
-#                     .rename({"len": "n_events"})
-#                  )
-#             df = df.with_columns(pl.lit(str(p)).alias("shard"))  # optional
-#             pieces.append(df)
-
-
-#         df = (pl.concat(pieces, how="vertical")
-#                   .group_by([subject_col, "shard"])
-#                   .agg(pl.col("n_events").sum())
-#                   .rename({subject_col:"subject_id"})).sort('subject_id')
-
-#         df = df.filter(pl.col('n_events') >3)
-
-#         return df
-    
-    
-#     def _read_timeline(self,
-#                        subject_id:int) -> pl.DataFrame:
-        
-#         shard = self.data_idx.filter(pl.col('subject_id') == subject_id)['shard'][0]
-
-#         data = pl.scan_parquet(os.path.join(self.data_path,shard),parallel='auto').select(
-#                                             ['subject_id','seq_id','out_id','er_id','hadm_id', 
-#                                              'icustay_id','time','code','numeric_value','code_type',
-#                                              'text_value']).filter(
-#                                               pl.col('subject_id') == subject_id).collect()
-#         return data
-
-    
-#     def _get_chunks_count(self,
-#                           data_idx: pl.DataFrame,
-#                           chunk_length: int,
-#                           overlap: int):
-#         payload  = chunk_length - 1
-#         step     = payload - overlap
-
-#         data_idx = data_idx.with_columns(
-#             pl.col("n_events")
-#               .map_elements(lambda n: 1 if n<=payload else ceil((n-payload)/step)+1,return_dtype=pl.Int32)
-#               .alias("n_chunks")
-#         )
-#         data_idx = data_idx.with_columns(
-#             pl.col("n_chunks").cum_sum().alias("cum_chunks")
-#         )
-
-#         cum  = data_idx["cum_chunks"]   
-#         subj = data_idx["subject_id"]
-#         shards = data_idx['shard']
-#         return data_idx, cum, subj
-
-#     def _get_chunk_at_idx(self,
-#                           cumm_sum: list,
-#                           subjects: list,
-#                           idx: int) -> Tuple[int,int,str]:
-#         i = bisect.bisect_right(cumm_sum, idx)
-#         left = cumm_sum[i-1] if i > 0 else 0
-#         return subjects[i], idx - left
 
 

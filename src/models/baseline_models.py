@@ -1,5 +1,6 @@
 
 import math
+import copy
 import torch
 import torch.nn as nn
 import lightning.pytorch as lt
@@ -10,10 +11,11 @@ from torchmetrics import Accuracy
 from typing import Optional, Tuple
 from transformers import AutoModel, AutoConfig
 from .utils import log_bootstrap_ci_text_percentile
-from transformers import MambaForCausalLM, MambaConfig
+from transformers.modeling_outputs import BaseModelOutput
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torchmetrics.classification import BinaryAUROC, BinaryAveragePrecision
 from transformers.models.roformer.modeling_roformer import RoFormerConfig, RoFormerEncoder
+
 
 
 #########################################################
@@ -1347,3 +1349,334 @@ class EHRMambaNTPPretraining(lt.LightningModule):
             T_max=self.max_epochs,
         )
         return {"optimizer": optimizer, "lr_scheduler": scheduler}
+    
+    
+#########################################################
+# HiBEHRT model
+#########################################################
+
+
+class HiBEHRT(nn.Module):
+    def __init__(self, 
+                 config,
+                 backbone):
+        super().__init__()
+        self.config = config
+        enc_cfg = copy.deepcopy(config)
+        agg_cfg = copy.deepcopy(config)
+        
+        self.encoder = backbone(enc_cfg, add_pooling_layer=False)
+        self.aggregator = backbone(agg_cfg, add_pooling_layer=False)
+
+    def forward(
+        self,
+        inputs_embeds,        
+        attention_mask,        
+        output_hidden_states=False,
+        return_dict=True,
+        **kwargs,
+    ):
+        B, n, L, d = inputs_embeds.shape
+        flat_embeds = inputs_embeds.reshape(B * n, L, d)       
+        flat_mask   = attention_mask.reshape(B * n, L)         
+
+        enc_out = self.encoder(
+            inputs_embeds=flat_embeds,
+            attention_mask=flat_mask,
+            output_hidden_states=output_hidden_states,
+            return_dict=True,
+        )
+        enc_last = enc_out.last_hidden_state                      
+
+        chunk_repr = enc_last[:, 0, :].reshape(B, n, d)            
+
+        chunk_mask = (attention_mask.sum(dim=-1) > 0).long()       
+
+        agg_out = self.aggregator(
+            inputs_embeds=chunk_repr,
+            attention_mask=chunk_mask,
+            output_hidden_states=output_hidden_states,
+            return_dict=True,
+        )
+
+        if return_dict:
+            return BaseModelOutput(
+                last_hidden_state=agg_out.last_hidden_state,       
+                hidden_states=agg_out.hidden_states if output_hidden_states else None,
+                attentions=None,
+            )
+        return (agg_out.last_hidden_state,)
+    
+
+class HiBEHRTModule(lt.LightningModule):
+    def __init__(
+        self,
+        config,
+        backbone,
+        ckpt_path: str = None,
+        lr: float = 2e-5,
+        wd: float = 0.001,
+        max_epochs: int = 100,
+        dropout: float = 0.1,
+        freeze: bool = False,
+        pooling: str = 'cls',
+        optimizer: str = 'sgd', 
+    ):
+        super().__init__()
+        self.save_hyperparameters(ignore=['backbone'])
+        self.pooling = pooling
+        self.backbone = HiBEHRT(config=config,backbone=backbone)
+        self.optimizer = optimizer
+        
+
+        self.train_step_preds = []
+        self.train_step_label = []
+        self.val_step_preds = []
+        self.val_step_label = []
+        self.test_step_preds = []
+        self.test_step_label = []
+
+        self.ehr_embeddings = EHREmbeddings(
+            vocab_size=config.vocab_size,
+            embedding_size=config.hidden_size,
+            pad_token_id=config.pad_token_id,
+            type_vocab_size=config.type_vocab_size,
+            visit_vocab_size=config.visit_vocab_size,
+            stage_vocab_size=config.stage_vocab_size,
+            dropout=dropout,
+            use_position_embeddings=True,
+            max_position_embeddings=(getattr(config, "max_position_embeddings", 512))
+        )
+
+        self.classifier = nn.Linear(config.hidden_size, 1)
+        self.criterion = nn.BCEWithLogitsLoss()
+
+        if ckpt_path:
+            self.get_pretrained_weights(ckpt_path=ckpt_path)
+
+        if freeze:
+            for param in self.backbone.parameters():
+                param.requires_grad = False
+            for param in self.classifier.parameters():
+                param.requires_grad = True
+
+        self.lr = lr
+        self.wd = wd
+        self.max_epochs = max_epochs
+        
+        self.train_auroc = BinaryAUROC()
+        self.train_auprc = BinaryAveragePrecision()
+        self.val_auroc = BinaryAUROC()
+        self.val_auprc = BinaryAveragePrecision()
+        self.test_auroc = BinaryAUROC()
+        self.test_auprc = BinaryAveragePrecision()
+
+
+    def forward(
+        self,
+        input_ids,
+        attention_mask,
+        type_ids,
+        visit_ids,
+        stage_ids, 
+        labels=None,
+    ):
+        inputs_embeds = self.ehr_embeddings.encode(
+            input_ids=input_ids,
+            type_ids=type_ids,
+            visit_ids=visit_ids,
+            stage_ids=stage_ids)
+
+        outputs = self.backbone(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            output_hidden_states=False,
+            return_dict=True,
+        )
+        last_hidden = outputs.last_hidden_state  
+
+        if self.pooling == 'mean':
+            chunk_mask = (attention_mask.sum(dim=-1) > 0).type_as(last_hidden)  
+            summed = (last_hidden * chunk_mask.unsqueeze(-1)).sum(dim=1)        
+            lengths = chunk_mask.sum(dim=1).clamp(min=1.0).unsqueeze(-1)        
+            pooled = summed / lengths                              
+        elif self.pooling == 'cls':
+            pooled = last_hidden[:, 0, :]
+
+        logits = self.classifier(pooled).squeeze(-1)              
+        return logits
+
+    def training_step(self, batch, batch_idx):
+
+        logits = self.forward(
+            input_ids=batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            type_ids=batch["type_ids"],
+            visit_ids=batch["visit_ids"],
+            stage_ids=batch["stage_ids"],
+        )
+
+        y = batch["label"].float().view(-1)    
+        loss = self.criterion(logits, y)
+
+        pos_score = torch.sigmoid(logits)       
+
+        self.train_step_label.append(y)
+        self.train_step_preds.append(pos_score)
+
+        self.log("train_loss", loss, prog_bar=True, on_epoch=True, logger=True, sync_dist=True)
+        return loss
+
+    def on_train_epoch_end(self) -> None:
+        y = torch.cat(self.train_step_label)
+        pos_score = torch.cat(self.train_step_preds)
+
+        auroc = self.train_auroc(pos_score, y.long())
+        auprc = self.train_auprc(pos_score, y.long())
+
+        self.log('train_auroc', auroc, on_epoch=True, logger=True, prog_bar=False, sync_dist=True)
+        self.log('train_auprc', auprc, on_epoch=True, logger=True, prog_bar=False, sync_dist=True)
+
+        self.train_step_label.clear()
+        self.train_step_preds.clear()
+
+    def validation_step(self, batch, batch_idx):
+        logits = self.forward(
+            input_ids=batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            type_ids=batch["type_ids"],
+            visit_ids=batch["visit_ids"],
+            stage_ids=batch["stage_ids"],   
+            labels=None,
+        )
+
+        y = batch["label"].float().view(-1)
+        loss = self.criterion(logits, y)
+        pos_score = torch.sigmoid(logits)
+
+        self.val_step_label.append(y)
+        self.val_step_preds.append(pos_score)
+
+        self.log("val_loss", loss, prog_bar=True, on_epoch=True, logger=True, sync_dist=True)
+        return loss
+
+    def on_validation_epoch_end(self,*arg, **kwargs) -> None:
+        y = torch.cat(self.val_step_label)
+        pos_score = torch.cat(self.val_step_preds)
+
+        auroc = self.val_auroc(pos_score, y.long())
+        auprc = self.val_auprc(pos_score, y.long())
+
+        self.log('val_auroc', auroc, on_epoch=True, logger=True, prog_bar=True, sync_dist=True)
+        self.log('val_auprc', auprc, on_epoch=True, logger=True, prog_bar=True, sync_dist=True)
+
+        self.val_step_label.clear()
+        self.val_step_preds.clear()
+
+    def test_step(self, batch, batch_idx):
+        logits = self.forward(
+            input_ids=batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            type_ids=batch["type_ids"],
+            visit_ids=batch["visit_ids"],
+            stage_ids=batch["stage_ids"],    
+            labels=None,
+        )
+
+        y = batch["label"].float().view(-1)
+        loss = self.criterion(logits, y)
+        pos_score = torch.sigmoid(logits)
+
+        self.test_step_label.append(y)
+        self.test_step_preds.append(pos_score)
+
+        self.log("test_loss", loss, prog_bar=True, on_epoch=True, logger=True)
+        return loss    
+
+    def on_test_epoch_end(self,*arg, **kwargs) -> None:
+        y = torch.cat(self.test_step_label)
+        pos_score = torch.cat(self.test_step_preds)
+
+        auroc = self.test_auroc(pos_score, y.long())
+        auprc = self.test_auprc(pos_score, y.long())
+
+        self.log('test_auroc', auroc, on_epoch=True, logger=True)
+        self.log('test_auprc', auprc, on_epoch=True, logger=True)
+
+        log_bootstrap_ci_text_percentile(
+            module=self,
+            y_true=y,
+            y_score=pos_score,
+            prefix="test",
+            num_iter=1000,
+            alpha=0.05,
+            ndigits=3,
+        )
+
+        self.test_step_label.clear()
+        self.test_step_preds.clear()  
+
+    def configure_optimizers(self):
+
+        if self.optimizer == 'adamw':
+            decay, no_decay = [], []
+            for name, p in self.named_parameters():
+                if "bias" in name or "LayerNorm" in name:
+                    no_decay.append(p)
+                else:
+                    decay.append(p)
+
+            optimizer = torch.optim.AdamW([{"params": decay, "weight_decay": self.wd},
+                                        {"params": no_decay, "weight_decay": 0.0}],
+                                        lr=self.lr,
+                                        betas=(0.9, 0.999),
+                                        eps=1e-8)
+
+        elif self.optimizer == 'sgd':
+            optimizer = torch.optim.SGD(self.parameters(),
+                                        lr=self.lr,
+                                        momentum=0.9,
+                                        nesterov=True,
+                                        weight_decay=self.wd)
+
+
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer=optimizer,
+            T_max=self.max_epochs,
+            eta_min=0)
+
+        return {"optimizer": optimizer,"lr_scheduler": scheduler,}
+    
+
+
+    def get_pretrained_weights(self, ckpt_path: str) -> None:
+        sd = torch.load(ckpt_path, map_location="cpu", weights_only=False)["state_dict"]
+
+        DROP_PREFIXES = [
+            "backbone.cls.",
+            "top_1_train.",
+            "top_1_val.",
+            "backbone.lm_head.",
+            "classifier.",
+            "criterion.",
+        ]
+
+        remapped = {}
+        for k, v in sd.items():
+            if any(k.startswith(dp) for dp in DROP_PREFIXES):
+                continue
+
+            if k.startswith("ehr_embeddings."):
+                remapped[k] = v
+                continue
+
+            if k.startswith("backbone.bert."):
+                rest = k[len("backbone.bert."):]
+                remapped["backbone.encoder." + rest] = v
+                remapped["backbone.aggregator." + rest] = v
+
+        missing, unexpected = self.load_state_dict(remapped, strict=False)
+        print("weights loaded successfully!")
+        print("missing keys:", missing)
+        print("+" * 50)
+        print("unexpected keys:", unexpected)

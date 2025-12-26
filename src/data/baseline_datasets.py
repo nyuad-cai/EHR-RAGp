@@ -626,3 +626,53 @@ class CausalLMDataCollator:
 
         out["labels"] = labels
         return out
+    
+
+#########################################################
+# HiBEHRT model
+#########################################################
+
+
+class HiBEHRTEvalCollator:
+    def __init__(self, seq_gen, chunk_length: int = 256, overlap: int = 32, add_cls_per_chunk: bool = True):
+        self.seq_gen = seq_gen
+        self.chunk_length = chunk_length
+        self.overlap = overlap
+        self.add_cls_per_chunk = add_cls_per_chunk
+
+    def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+
+        chunked_per_patient = []
+        labels = []
+
+        for sample in batch:
+            labels.append(sample["label"])
+
+            timeline = {k: v for k, v in sample.items() if k != "label"}
+
+            chunks = self.seq_gen.get_overlapped_chunks(
+                timeline=timeline,
+                chunk_length=self.chunk_length,
+                overlap=self.overlap,
+                add_cls_per_chunk=self.add_cls_per_chunk,
+            )
+            chunked_per_patient.append(chunks)
+
+        n_max = max(len(chunks) for chunks in chunked_per_patient)
+
+        keys = list(chunked_per_patient[0][0].keys())
+
+        out = {}
+        for k in keys:
+            per_patient_tensors = []
+            for chunks in chunked_per_patient:
+                tensors = [torch.as_tensor(ch[k]) for ch in chunks]
+                if len(tensors) < n_max:
+                    pad_chunk = torch.zeros_like(tensors[0])
+                    tensors.extend([pad_chunk] * (n_max - len(tensors)))
+                per_patient_tensors.append(torch.stack(tensors, dim=0))  
+            out[k] = torch.stack(per_patient_tensors, dim=0)  
+
+        out["label"] = torch.as_tensor(labels)
+
+        return out

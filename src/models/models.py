@@ -27,7 +27,7 @@ class EHREmbeddings(nn.Module):
         time_in_features: int = 1,
         time_out_features: int = 16,
         use_numeric: bool = False,
-        numeric_hidden_size: int = 16,   # <-- small bottleneck for numeric
+        numeric_hidden_size: int = 16,   
     ):
         super().__init__()
 
@@ -36,7 +36,7 @@ class EHREmbeddings(nn.Module):
         self.visit_emb = nn.Embedding(visit_vocab_size, embedding_size, padding_idx=pad_token_id)
         self.stage_emb = nn.Embedding(stage_vocab_size, embedding_size, padding_idx=pad_token_id)
 
-        # ---- positional (local) ----
+        
         self.use_position_embeddings = use_position_embeddings
         if use_position_embeddings:
             if max_position_embeddings <= 0:
@@ -45,7 +45,7 @@ class EHREmbeddings(nn.Module):
         else:
             self.pos_emb = None
 
-        # ---- time (Time2Vec) ----
+        
         self.use_time = use_time
         if use_time:
             self.time2vec = Time2Vec(
@@ -58,16 +58,16 @@ class EHREmbeddings(nn.Module):
             self.time2vec = None
             self.time_proj = None
 
-        # ---- numeric values ----
+        
         self.use_numeric = use_numeric
         if use_numeric:
             self.numeric_hidden_size = numeric_hidden_size
-            # 1 scalar -> small hidden -> embedding_size
+            
             self.num_proj1 = nn.Linear(1, numeric_hidden_size)
             self.num_proj2 = nn.Linear(numeric_hidden_size, embedding_size)
             self.num_act = nn.GELU()
 
-            # learned embedding for "no numeric value"
+            
             self.null_numeric = nn.Parameter(torch.zeros(embedding_size))
             nn.init.normal_(self.null_numeric, mean=0.0, std=0.02)
 
@@ -90,25 +90,34 @@ class EHREmbeddings(nn.Module):
         type_ids,
         visit_ids,
         stage_ids,
-        time_feats=None,          # (B, L) or (B, L, time_in_features)
-        numeric_values=None,      # (B, L) normalized in [-3, 3]
-        numeric_mask=None,        # (B, L) bool/int: True if numeric is present
+        time_feats=None,          
+        numeric_values=None,     
+        numeric_mask=None,        
     ):
-        # base token + type + visit + stage
+        
         x = self.tok_emb(input_ids.long())
         x = x + self.type_emb(type_ids.long())
         x = x + self.visit_emb(visit_ids.long())
         x = x + self.stage_emb(stage_ids.long())
 
-        # positional (local) embeddings
+        
         if self.pos_emb is not None:
-            bsz, seqlen = input_ids.size()
-            position_ids = torch.arange(
-                seqlen, device=input_ids.device
-            ).unsqueeze(0).expand(bsz, seqlen)
+            shape = input_ids.size()
+            seqlen = shape[-1]
+
+            position_ids = torch.arange(seqlen, device=input_ids.device)
+
+            if input_ids.dim() == 2:          # [B, L]
+                bsz = shape[0]
+                position_ids = position_ids.unsqueeze(0).expand(bsz, seqlen)          # [B, L]
+            elif input_ids.dim() == 3:        # [B, n, L]
+                bsz, n = shape[0], shape[1]
+                position_ids = position_ids.view(1, 1, seqlen).expand(bsz, n, seqlen) # [B, n, L]
+            else:
+                raise ValueError(f"Unsupported input_ids.dim()={input_ids.dim()}")
             x = x + self.pos_emb(position_ids)
 
-        # time (Time2Vec)
+        
         if self.use_time:
             if time_feats is None:
                 raise ValueError("time_feats must be provided when use_time=True")
@@ -116,22 +125,22 @@ class EHREmbeddings(nn.Module):
                 time_feats = time_feats.unsqueeze(-1)
             elif time_feats.dim() != 3:
                 raise ValueError(f"Unexpected time_feats.dim()={time_feats.dim()}, expected 2 or 3")
-            t = self.time2vec(time_feats.float())   # (B, L, time_out_features)
-            t = self.time_proj(t)                   # (B, L, embedding_size)
+            t = self.time2vec(time_feats.float())   
+            t = self.time_proj(t)                   
             x = x + t
 
-        # numeric values
+        
         if self.use_numeric:
             if numeric_values is None or numeric_mask is None:
                 raise ValueError("numeric_values and numeric_mask must be provided when use_numeric=True")
 
-            # (optional safety) clamp extreme values
-            v = numeric_values.float().unsqueeze(-1)        # (B, L, 1)
-            # small bottleneck then project to emb size
-            h = self.num_act(self.num_proj1(v))             # (B, L, H_num)
-            num_emb = self.num_proj2(h)                     # (B, L, D)
+            
+            v = numeric_values.float().unsqueeze(-1)       
+            
+            h = self.num_act(self.num_proj1(v))             
+            num_emb = self.num_proj2(h)                     
 
-            mask = numeric_mask.bool().unsqueeze(-1)        # (B, L, 1)
+            mask = numeric_mask.bool().unsqueeze(-1)        
             num_emb = torch.where(mask, num_emb, self.null_numeric.view(1, 1, -1))
             x = x + num_emb
 
@@ -329,7 +338,7 @@ class EvalModel(lt.LightningModule):
             use_numeric=use_numeric,  
         )
 
-        # self.backbone.embeddings = self.ehr_embeddings
+    
 
         self.classifier = nn.Linear(config.hidden_size, 1)
         self.criterion = nn.BCEWithLogitsLoss()
