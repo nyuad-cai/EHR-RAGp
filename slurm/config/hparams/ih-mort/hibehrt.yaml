@@ -2,7 +2,7 @@ task: y_mort
 backbone_name: bert
 variant: hibehrt
 main_window: within48_query
-version: without_retrieval
+version: baslines
 job_id: ${SLURM_JOB_ID}
 pooling: cls
 use_time: False
@@ -10,7 +10,7 @@ use_numeric: False
 ckpt_path: /scratch/sas10092/ehr-foundation/models/mlm/wandb/run-20251223_083520-bert_hibehrt_13609323_512_64_15_maskprob_12_5overlap/files/ckpt/epoch=89-step=405720.ckpt
 seq_gen:
   tokenizer_path: /scratch/sas10092/ehr-foundation/vocab.json
-  seq_length: 512
+  seq_length: 1023
   overlap: 0
 
 dataset:

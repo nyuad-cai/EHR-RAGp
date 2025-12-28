@@ -542,13 +542,16 @@ class EvalModel(lt.LightningModule):
                                         lr=self.lr,
                                         betas=(0.9, 0.999),
                                         eps=1e-8)
-
+            
+        elif self.optimizer == 'adam':
+            optimizer = torch.optim.Adam(self.parameters(),
+                                        lr=self.lr)
         elif self.optimizer == 'sgd':
             optimizer = torch.optim.SGD(self.parameters(),
                                         lr=self.lr,
                                         momentum=0.9,
                                         nesterov=True,
-                                        weight_decay=self.wd)
+                                        weight_decay=self.wd,)
 
 
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(

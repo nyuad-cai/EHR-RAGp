@@ -12,7 +12,9 @@ from optuna.samplers import TPESampler
 from torch.utils.data import DataLoader
 from src.models.models import EvalModel
 from lightning.pytorch.loggers import WandbLogger
+from src.models.baseline_models import HiBEHRTModule 
 from src.models.baseline_models import DescEmbEvalModel
+from src.data.baseline_datasets import HiBEHRTEvalCollator
 from src.data.baseline_datasets import DescEmbDataset, DescEmbCollator
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor
 from src.models.baseline_models import GenHPFDownstreamModule, GenHPFEncoder
@@ -26,6 +28,7 @@ from src.models.utils import get_config_and_model_cls, fix_roberta_longformer_ma
 
 
 
+
 parser = argparse.ArgumentParser(description='MLM pretraining command line interface')
 parser.add_argument('--config-path', type=str, required=True)
 parser.add_argument('--freeze', action='store_true')
@@ -33,7 +36,7 @@ args = parser.parse_args()
 config = load_config_with_env(args.config_path)
 
 if config['backbone_name'] == 'descemb':
-    mode = 'descemb-ft' if args.freeze else 'descemb-ft'
+    mode = 'cls-ft' if args.freeze else 'bert-ft'
 elif config.get('variant') is not None:
     mode = config['variant']
 else:
@@ -43,9 +46,201 @@ else:
 def objective(trial: optuna.trial.Trial) -> float:
     
     try:
-        if config['backbone_name'] in ['bert','roberta','longformer','big_bird','roformer','modernbert']:
-            ConfigClass, ModelClass = get_config_and_model_cls(config['backbone_name'], mode='eval', 
-                                                               variant=config['variant'] if 'variant' in config else None)
+        if config['backbone_name'] == 'bert' and config['variant'] == 'hibehrt':
+            ConfigClass, ModelClass = get_config_and_model_cls(config['backbone_name'], mode='eval', variant='hibehrt')
+            learning_rate = trial.suggest_float("learning_rate", 5e-5, 5e-4)
+            hparams={'learning_rate': learning_rate}
+            seq_gen = SequencesGenerator(tokenizer_path=config['seq_gen']['tokenizer_path'],
+                                        chunk_length=config['seq_gen']['seq_length'],
+                                        overlap=config['seq_gen']['overlap'])
+            train_dataset = EvalDataset(dataset_path=config['dataset']['data_path'],
+                                        data_idx_path=config['dataset']['data_idx_path'],
+                                        seq_gen=seq_gen,
+                                        limits_dict=limits,
+                                        task=config['task'],
+                                        main_window=config['main_window'],
+                                        seq_length=config['seq_gen']['seq_length'] + 1,
+                                        use_numeric=False,
+                                        add_cls=False,
+                                        use_time=False,
+                                        split='train')
+            val_dataset = EvalDataset(dataset_path=config['dataset']['data_path'],
+                                        data_idx_path=config['dataset']['data_idx_path'],
+                                        seq_gen=seq_gen,
+                                        limits_dict=limits,
+                                        task=config['task'],
+                                        main_window=config['main_window'],
+                                        seq_length=config['seq_gen']['seq_length'] + 1,
+                                        use_numeric=False,
+                                        add_cls=False,
+                                        use_time=False,
+                                        split='val')
+            collate_fn = HiBEHRTEvalCollator(seq_gen=seq_gen,
+                                             chunk_length=256,
+                                             overlap=32,
+                                             add_cls_per_chunk=True)
+            cfg = ConfigClass(
+                vocab_size=seq_gen.tokenizer.vocab_size,
+                cls_token_id=seq_gen.tokenizer.cls_id,
+                pad_token_id=seq_gen.tokenizer.pad_id,
+                type_vocab_size=28,
+                visit_vocab_size=102,
+                stage_vocab_size=5,
+                refernece_compile=False)
+            
+            model = HiBEHRTModule(config=cfg,
+                                  backbone=ModelClass,
+                                  ckpt_path=config['ckpt_path'],
+                                  lr=learning_rate,
+                                  max_epochs=75,
+                                  freeze=False,
+                                  pooling='cls',
+                                  dropout=0.1,
+                                  optimizer='sgd')
+            
+        elif config['backbone_name'] in 'bert' and config['variant'] == 'medbert':
+            ConfigClass, ModelClass = get_config_and_model_cls(config['backbone_name'], mode='eval', variant=config['variant'])
+            learning_rate = trial.suggest_float("learning_rate", 1e-5, 5e-4)
+            seq_gen = SequencesGenerator(tokenizer_path=config['seq_gen']['tokenizer_path'],
+                                            chunk_length=config['seq_gen']['seq_length'],
+                                            overlap=config['seq_gen']['overlap'])
+            hparams={'learning_rate': learning_rate}
+            collate_fn = EvalCollator()
+            train_dataset = EvalDataset(dataset_path=config['dataset']['data_path'],
+                                        data_idx_path=config['dataset']['data_idx_path'],
+                                        seq_gen=seq_gen,
+                                        seq_length=config['seq_gen']['seq_length'],
+                                        limits_dict=limits,
+                                        main_window=config['main_window'],
+                                        task=config['task'],
+                                        use_time=False,
+                                        use_numeric=False,
+                                        split='train')
+            val_dataset = EvalDataset(dataset_path=config['dataset']['data_path'],
+                                        data_idx_path=config['dataset']['data_idx_path'],
+                                        seq_gen=seq_gen,
+                                        seq_length=config['seq_gen']['seq_length'],
+                                        limits_dict=limits,
+                                        main_window=config['main_window'],
+                                        task=config['task'],
+                                        use_time=False,
+                                        use_numeric=False,
+                                        split='val')
+            cfg = ConfigClass(
+                vocab_size=seq_gen.tokenizer.vocab_size,
+                cls_token_id=seq_gen.tokenizer.cls_id,
+                pad_token_id=seq_gen.tokenizer.pad_id,
+                type_vocab_size=28,
+                visit_vocab_size=102,
+                stage_vocab_size=5,
+                refernece_compile=False)
+            model = EvalModel(config=cfg,
+                              backnone=ModelClass,
+                              ckpt_path=config['ckpt_path'],
+                              lr=learning_rate,
+                              max_epochs=75,
+                              pooling='cls',
+                              use_numeric=False,
+                              use_time=False,
+                              freeze=False,
+                              optimizer='sgd')
+            
+        elif config['backbone_name'] in 'bert' and config['variant'] == 'behrt':
+            ConfigClass, ModelClass = get_config_and_model_cls(config['backbone_name'], mode='eval', variant=config['variant'])
+            learning_rate = trial.suggest_float("learning_rate", 5e-5, 5e-4)
+            seq_gen = SequencesGenerator(tokenizer_path=config['seq_gen']['tokenizer_path'],
+                                            chunk_length=config['seq_gen']['seq_length'],
+                                            overlap=config['seq_gen']['overlap'])
+            hparams={'learning_rate': learning_rate}
+            collate_fn = EvalCollator()
+            train_dataset = EvalDataset(dataset_path=config['dataset']['data_path'],
+                                        data_idx_path=config['dataset']['data_idx_path'],
+                                        seq_gen=seq_gen,
+                                        seq_length=config['seq_gen']['seq_length'],
+                                        limits_dict=limits,
+                                        main_window=config['main_window'],
+                                        task=config['task'],
+                                        use_time=False,
+                                        use_numeric=False,
+                                        split='train')
+            val_dataset = EvalDataset(dataset_path=config['dataset']['data_path'],
+                                        data_idx_path=config['dataset']['data_idx_path'],
+                                        seq_gen=seq_gen,
+                                        seq_length=config['seq_gen']['seq_length'],
+                                        limits_dict=limits,
+                                        main_window=config['main_window'],
+                                        task=config['task'],
+                                        use_time=False,
+                                        use_numeric=False,
+                                        split='val')
+            
+            cfg = ConfigClass(
+                vocab_size=seq_gen.tokenizer.vocab_size,
+                cls_token_id=seq_gen.tokenizer.cls_id,
+                pad_token_id=seq_gen.tokenizer.pad_id,
+                type_vocab_size=28,
+                visit_vocab_size=102,
+                stage_vocab_size=5,
+                refernece_compile=False)
+            model = EvalModel(config=cfg,
+                              backnone=ModelClass,
+                              ckpt_path=config['ckpt_path'],
+                              lr=learning_rate,
+                              max_epochs=75,
+                              pooling='cls',
+                              use_numeric=False,
+                              use_time=False,
+                              freeze=False,
+                              optimizer='sgd')
+            
+        elif config['backbone_name'] in 'bert' and config['variant'] == 'cehrbert':
+            ConfigClass, ModelClass = get_config_and_model_cls(config['backbone_name'], mode='eval', variant=config['variant'])
+            learning_rate = trial.suggest_float("learning_rate", 1e-5, 2e-4)
+            seq_gen = SequencesGenerator(tokenizer_path=config['seq_gen']['tokenizer_path'],
+                                            chunk_length=config['seq_gen']['seq_length'],
+                                            overlap=config['seq_gen']['overlap'])
+            hparams={'learning_rate': learning_rate}
+            collate_fn = EvalCollator()
+            train_dataset = EvalDataset(dataset_path=config['dataset']['data_path'],
+                                        data_idx_path=config['dataset']['data_idx_path'],
+                                        seq_gen=seq_gen,
+                                        seq_length=config['seq_gen']['seq_length'],
+                                        limits_dict=limits,
+                                        main_window=config['main_window'],
+                                        task=config['task'],
+                                        use_time=True,
+                                        use_numeric=False,
+                                        split='train')
+            val_dataset = EvalDataset(dataset_path=config['dataset']['data_path'],
+                                        data_idx_path=config['dataset']['data_idx_path'],
+                                        seq_gen=seq_gen,
+                                        seq_length=config['seq_gen']['seq_length'],
+                                        limits_dict=limits,
+                                        main_window=config['main_window'],
+                                        task=config['task'],
+                                        use_time=True,
+                                        use_numeric=False,
+                                        split='val')
+            cfg = ConfigClass(
+                vocab_size=seq_gen.tokenizer.vocab_size,
+                cls_token_id=seq_gen.tokenizer.cls_id,
+                pad_token_id=seq_gen.tokenizer.pad_id,
+                type_vocab_size=28,
+                visit_vocab_size=102,
+                stage_vocab_size=5,
+                refernece_compile=False)
+            model = EvalModel(config=cfg,
+                              backnone=ModelClass,
+                              ckpt_path=config['ckpt_path'],
+                              lr=learning_rate,
+                              max_epochs=75,
+                              pooling='cls',
+                              use_numeric=False,
+                              use_time=True,
+                              freeze=False,
+                              optimizer='sgd')       
+        elif config['backbone_name'] in ['roberta','longformer','big_bird','roformer','modernbert']:
+            ConfigClass, ModelClass = get_config_and_model_cls(config['backbone_name'], mode='eval', variant=None)
             learning_rate = trial.suggest_float("learning_rate", 1e-5, 5e-4)
             weight_decay = trial.suggest_float("weight_decay", 1e-3, 1e-2)
             pooling = config['pooling'] if 'pooling' in config else trial.suggest_categorical("pooling",['cls','mean'])
@@ -65,8 +260,8 @@ def objective(trial: optuna.trial.Trial) -> float:
                                         limits_dict=limits,
                                         main_window=config['main_window'],
                                         task=config['task'],
-                                        use_time=config['use_time'] if 'use_time' in config else True,
-                                        use_numeric=config['use_numeric'] if 'use_numeric' in config else use_numeric,
+                                        use_time=True,
+                                        use_numeric=use_numeric,
                                         split='train')
             val_dataset = EvalDataset(dataset_path=config['dataset']['data_path'],
                                         data_idx_path=config['dataset']['data_idx_path'],
@@ -75,10 +270,9 @@ def objective(trial: optuna.trial.Trial) -> float:
                                         limits_dict=limits,
                                         main_window=config['main_window'],
                                         task=config['task'],
-                                        use_time=config['use_time'] if 'use_time' in config else True,
-                                        use_numeric=config['use_numeric'] if 'use_numeric' in config else use_numeric,
+                                        use_time=True,
+                                        use_numeric=use_numeric,
                                         split='val')
-
             cfg = ConfigClass(
                 vocab_size=seq_gen.tokenizer.vocab_size,
                 cls_token_id=seq_gen.tokenizer.cls_id,
@@ -87,28 +281,24 @@ def objective(trial: optuna.trial.Trial) -> float:
                 visit_vocab_size=102,
                 stage_vocab_size=5,
                 refernece_compile=False)
-
             cfg = fix_roberta_longformer_max_pos(cfg)
             model = EvalModel(config=cfg,
-                            backnone=ModelClass,
-                            ckpt_path=config['ckpt_path'],
-                            lr=learning_rate,
-                            wd=weight_decay,
-                            max_epochs=75,
-                            pooling=pooling,
-                            use_numeric=use_numeric,
-                            use_time=config['use_time'] if 'use_time' in config else True,
-                            freeze=False,
-                            optimizer='sgd')
-
-        
-
+                              backnone=ModelClass,
+                              ckpt_path=config['ckpt_path'],
+                              lr=learning_rate,
+                              wd=weight_decay,
+                              max_epochs=75,
+                              pooling=pooling,
+                              use_numeric=use_numeric,
+                              use_time=True,
+                              freeze=False,
+                              optimizer='sgd')
+            
         elif config['backbone_name'] == 'descemb':
             learning_rate = trial.suggest_float("learning_rate", 1e-5, 5e-4)
             dropout = trial.suggest_float("dropout", low=0.1, high=0.5, step=0.2)
             hparams={'learning_rate': learning_rate,
                       'dropout': dropout}
-            
             train_dataset = DescEmbDataset(dataset_path=config['dataset']['data_path'],
                                         data_idx_path=config['dataset']['data_idx_path'],
                                         task=config['task'],
@@ -124,7 +314,6 @@ def objective(trial: optuna.trial.Trial) -> float:
                                         max_events=511,
                                         split='val') 
             collate_fn = DescEmbCollator(pad_token_id=train_dataset.tokenizer.pad_token_id)
-
             cfg = SimpleNamespace(bert_model_name="google/bert_uncased_L-2_H-128_A-2",
                                   pred_embed_dim=128,
                                   pred_hidden_dim=256,     
@@ -137,7 +326,6 @@ def objective(trial: optuna.trial.Trial) -> float:
                                     max_epochs=75,
                                     dropout=dropout,
                                     freeze=args.freeze)
-
         elif config['backbone_name'] in ['genhpf']:
             learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-4)
             dropout = trial.suggest_float("dropout", low=0.1, high=0.5, step=0.2)
@@ -162,8 +350,6 @@ def objective(trial: optuna.trial.Trial) -> float:
                 max_events=511,
                 max_tokens=64)
             collate_fn = GenHPFEvalCollator(pad_token_id=train_dataset.tokenizer.pad_token_id)
-
-
             encoder = GenHPFEncoder(vocab_size=train_dataset.tokenizer.vocab_size,
                                     pad_token_id=train_dataset.tokenizer.pad_token_id,
                                     encoder_embed_dim=128,
@@ -184,14 +370,10 @@ def objective(trial: optuna.trial.Trial) -> float:
                                            max_epochs=75,
                                            num_outputs=1,
                                            pos_weight=1.0)
-
-
             
         elif config['backbone_name'] == 'remed':
             learning_rate = trial.suggest_float("learning_rate", 1e-6, 1e-3)
             hparams={'learning_rate': learning_rate,}
-            
-
             train_dataset = REMedGenHPFPoolDataset(hf_path=config['dataset']['data_path'],
                                                    data_idx_path=config['dataset']['data_idx_path'],
                                                    seq_field=config['main_window'],
@@ -245,7 +427,6 @@ def objective(trial: optuna.trial.Trial) -> float:
                                          use_warmup=True,
                                          warmup_steps=500,
                                          num_classes=1)
-
         train_dataloader = DataLoader(dataset=train_dataset,
                                     batch_size=config['dataloader']['batch_size'],
                                     num_workers=8,

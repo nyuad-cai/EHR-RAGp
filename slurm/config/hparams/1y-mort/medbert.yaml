@@ -2,7 +2,7 @@ task: y_mort_1yr
 backbone_name: bert
 variant: medbert
 main_window: within_stay_query
-version: without_retrieval
+version: baslines
 job_id: ${SLURM_JOB_ID}
 pooling: cls
 use_time: False

@@ -11,7 +11,7 @@
 
 ##SBATCH -q nvidia-xxl
 ##SBATCH -q shamout
-#SBATCH -q cair
+##SBATCH -q cair
 
 
 ##SBATCH  --constraint=80g
@@ -58,6 +58,7 @@ set -x
 
 # hibehrt
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/hibehrt.yaml
+
 
 # ehrmaba
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/ehrmamba.yaml

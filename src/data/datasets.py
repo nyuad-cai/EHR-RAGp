@@ -802,6 +802,7 @@ class EvalDataset(Dataset):
                  seq_length: int = 512,
                  use_time: bool = True,
                  use_numeric: bool = False,
+                 add_cls=True,
                  split: str = 'train') -> None:
         
         needed_cols = ['subject_id', 'input_ids', 'attention_mask', 
@@ -816,6 +817,7 @@ class EvalDataset(Dataset):
         self.end_limit   = limits_dict[main_window][seq_length][1]
         self.task = task
         
+        self.add_cls = add_cls
         self.seq_gen = seq_gen
         self.data_idx =  pl.scan_parquet(data_idx_path).collect()
         self.data_idx =  self.data_idx.filter(pl.col('split') == split)
@@ -863,10 +865,9 @@ class EvalDataset(Dataset):
         start = stay[self.start_limit][0]
         end = stay[self.end_limit][0]
 
-        
         timeline_encoded = self.hf_dataset.select(self.index[subject_id])[0]
         prediction_window = {k: (v[start:end] if isinstance(v, (list, np.ndarray)) else v) for k, v in timeline_encoded.items()}
-        prediction_window = self.seq_gen.get_overlapped_chunks(prediction_window)
+        prediction_window = self.seq_gen.get_overlapped_chunks(prediction_window, add_cls_per_chunk=self.add_cls)
         prediction_window[0]['label'] = label
         
         return prediction_window[0]

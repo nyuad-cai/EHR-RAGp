@@ -1631,13 +1631,14 @@ class HiBEHRTModule(lt.LightningModule):
                                         lr=self.lr,
                                         betas=(0.9, 0.999),
                                         eps=1e-8)
+        elif self.optimizer == 'adam':
+            optimizer = torch.optim.Adam(params=self.parameters(), lr=self.lr)
 
         elif self.optimizer == 'sgd':
             optimizer = torch.optim.SGD(self.parameters(),
                                         lr=self.lr,
                                         momentum=0.9,
-                                        nesterov=True,
-                                        weight_decay=self.wd)
+                                        nesterov=True)
 
 
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -1647,20 +1648,11 @@ class HiBEHRTModule(lt.LightningModule):
 
         return {"optimizer": optimizer,"lr_scheduler": scheduler,}
     
-
-
     def get_pretrained_weights(self, ckpt_path: str) -> None:
         sd = torch.load(ckpt_path, map_location="cpu", weights_only=False)["state_dict"]
 
-        DROP_PREFIXES = [
-            "backbone.cls.",
-            "top_1_train.",
-            "top_1_val.",
-            "backbone.lm_head.",
-            "classifier.",
-            "criterion.",
-        ]
-
+        DROP_PREFIXES = ["backbone.cls.", "top_1_train.", "top_1_val.",
+                         "backbone.lm_head.", "classifier.", "criterion."]
         remapped = {}
         for k, v in sd.items():
             if any(k.startswith(dp) for dp in DROP_PREFIXES):

@@ -11,7 +11,7 @@
 
 ##SBATCH -q cair
 
-#SBATCH -q shamout
+##SBATCH -q shamout
 
 ##SBATCH  -q nvidia-xxl
 ##SBATCH  --constraint=80g
@@ -42,17 +42,19 @@ set -x
 
 
 
-# med-bert
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/medbert.yaml
 
-# cehrbert
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/cehrbert.yaml
+# hibehrt
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/hibehrt.yaml
+
+# medbert
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/medbert.yaml
 
 # behrt
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/behrt.yaml
 
-# hibehrt
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/hibehrt.yaml
+# cehrbert
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/cehrbert.yaml
+
 
 # ehrmaba
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/ehrmamba.yaml
