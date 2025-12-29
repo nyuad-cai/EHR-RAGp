@@ -1,0 +1,35 @@
+task: y_icu_readmit_30
+backbone_name: descemb
+main_window: within_stay_descemb
+version: baslines
+job_id: ${SLURM_JOB_ID}
+
+dataset:
+  data_path: /scratch/sas10092/ehr-foundation/data/desc_gen_dataset
+  data_idx_path: /scratch/sas10092/ehr-foundation/downstream_idx.parquet
+
+dataloader:
+  batch_size: 64
+
+logger:
+  wandb_api_key: 59b6438e0496b3089f91abef35d31dae69b6c009
+  project: MedEHR_Final
+  entity: nyuad-cai
+  log_dir: /scratch/sas10092/ehr-foundation/models/eval
+
+
+
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+

@@ -41,9 +41,9 @@ else:
     mode = 'final'
 
 
-learning_rate = False
+learning_rate = 0.000683
 weight_decay = False
-pooling = False
+pooling = 'cls' 
 use_numeric = True    
 dropout = False
 
@@ -544,8 +544,7 @@ trainer = lt.Trainer(accelerator='auto',
                     num_sanity_val_steps=0,
                     max_epochs=75,
                     precision=precision,
-                    callbacks=[early_stop,lr_monitor],
-                    enable_checkpointing=False
+                    callbacks=[early_stop,lr_monitor,checkpoint_callback],
                     )
 
 trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)

@@ -19,6 +19,6 @@ dataloader:
 
 logger:
   wandb_api_key: 59b6438e0496b3089f91abef35d31dae69b6c009
-  project: MedEHR_Eval
+  project: MedEHR_Final
   entity: nyuad-cai
   log_dir: /scratch/sas10092/ehr-foundation/models/eval

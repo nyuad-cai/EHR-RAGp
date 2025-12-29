@@ -25,7 +25,40 @@ set -x
 
 
 # python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/ih-mort/roberta.yaml
-# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/ih-mort/longformer.yaml
-# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/ih-mort/big_bird.yaml
-# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/ih-mort/roformer.yaml
-# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/ih-mort/modernbert.yaml
+# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/ih-mort/longformer.yaml 
+# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/ih-mort/big_bird.yaml 
+# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/ih-mort/roformer.yaml 
+# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/ih-mort/modernbert.yaml 
+
+
+
+# # descemb cls-ft
+# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/ih-mort/descemb.yaml --freeze
+
+# # descemb -funetune
+# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/ih-mort/descemb.yaml
+
+# genhpf
+# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/ih-mort/genhpf.yaml
+
+# remed
+# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/ih-mort/remed.yaml
+
+
+
+
+# med-bert
+# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/ih-mort/medbert.yaml
+
+# cehrbert
+# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/ih-mort/cehrbert.yaml
+
+# behrt
+# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/ih-mort/behrt.yaml
+
+# hibehrt
+# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/ih-mort/hibehrt.yaml
+
+
+# ehrmaba
+# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/ih-mort/ehrmamba.yaml
