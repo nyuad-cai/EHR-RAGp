@@ -747,47 +747,56 @@ limits = {
     'within24_query': {512:  ['w24_start_512',  'w24_end_512' ],
                        1024: ['w24_start_1024', 'w24_end_1024'],
                        1536: ['w24_start_1536', 'w24_end_1536'],
+                       2048: ['w24_start_2048', 'w24_end_2048'],
                       },
     
     'within24_hist_icu': {512: ['wStay_min', 'w24_start_512' ],
                          1024: ['wStay_min', 'w24_start_1024'],
                          1536: ['wStay_min', 'w24_start_1536'],
+                         2048: ['wStay_min', 'w24_start_2048'],
                       },
     
     'within24_hist_full': {512: [ 0, 'w24_start_512' ],
                           1024: [ 0, 'w24_start_1024'],
                           1536: [ 0, 'w24_start_1536'],
+                          2048: [ 0, 'w24_start_2048'],
                           },
 
     
     'within48_query': {512:  ['w48_start_512',  'w48_end_512' ],
                        1024: ['w48_start_1024', 'w48_end_1024'],
                        1536: ['w48_start_1536', 'w48_end_1536'],
+                       2048: ['w48_start_2048', 'w48_end_2048'],
                       },
 
     'within48_hist_icu': {512: ['wStay_min', 'w48_start_512' ],
                          1024: ['wStay_min', 'w48_start_1024'],
-                         1536: ['wStay_min', 'w48_start_1536']
+                         1536: ['wStay_min', 'w48_start_1536'],
+                         2048: ['wStay_min', 'w48_start_2048'],
                       },
     
     'within48_hist_full': {512: [ 0, 'w48_start_512' ],
                           1024: [ 0, 'w48_start_1024'],
-                          1536: [ 0, 'w48_start_1536']
+                          1536: [ 0, 'w48_start_1536'],
+                          2048: [ 0, 'w48_start_2048'],
                           },
     
     'within_stay_query': {512:  ['wStay_start_512',  'wStay_end_512' ],
                           1024: ['wStay_start_1024', 'wStay_end_1024'],
-                          1536: ['wStay_start_1536', 'wStay_end_1536']
+                          1536: ['wStay_start_1536', 'wStay_end_1536'],
+                          2048: ['wStay_start_2048', 'wStay_end_2048'],
                          },
     
     'within_stay_hist_icu': {512:  ['wStay_min', 'wStay_start_512' ],
                              1024: ['wStay_min', 'wStay_start_1024'],
                              1536: ['wStay_min', 'wStay_start_1536'],
+                             2048: ['wStay_min', 'wStay_start_2048'],
                             },
     
     'within_stay_hist_full': {512:  [ 0, 'w48_start_512' ],
                               1024: [ 0, 'w48_start_1024'],
                               1536: [ 0, 'w48_start_1536'],
+                              2048: [ 0, 'w48_start_2048'],
                              },
     }
 

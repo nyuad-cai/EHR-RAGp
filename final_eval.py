@@ -274,7 +274,64 @@ elif config['backbone_name'] in 'bert' and config['variant'] == 'cehrbert':
                         use_numeric=False,
                         use_time=True,
                         freeze=False,
-                        optimizer='sgd')       
+                        optimizer='sgd')
+
+elif config['backbone_name'] == 'mamba':
+    ConfigClass, ModelClass = get_config_and_model_cls(config['backbone_name'], mode='eval', variant=None)
+    seq_gen = SequencesGenerator(tokenizer_path=config['seq_gen']['tokenizer_path'],
+                                    chunk_length=config['seq_gen']['seq_length'],
+                                    overlap=config['seq_gen']['overlap'])
+    collate_fn = EvalCollator()
+    train_dataset = EvalDataset(dataset_path=config['dataset']['data_path'],
+                                data_idx_path=config['dataset']['data_idx_path'],
+                                seq_gen=seq_gen,
+                                seq_length=config['seq_gen']['seq_length'],
+                                limits_dict=limits,
+                                main_window=config['main_window'],
+                                task=config['task'],
+                                use_time=True,
+                                use_numeric=False,
+                                split='train')
+    val_dataset = EvalDataset(dataset_path=config['dataset']['data_path'],
+                                data_idx_path=config['dataset']['data_idx_path'],
+                                seq_gen=seq_gen,
+                                seq_length=config['seq_gen']['seq_length'],
+                                limits_dict=limits,
+                                main_window=config['main_window'],
+                                task=config['task'],
+                                use_time=True,
+                                use_numeric=False,
+                                split='val')
+    test_dataset = EvalDataset(dataset_path=config['dataset']['data_path'],
+                                data_idx_path=config['dataset']['data_idx_path'],
+                                seq_gen=seq_gen,
+                                seq_length=config['seq_gen']['seq_length'],
+                                limits_dict=limits,
+                                main_window=config['main_window'],
+                                task=config['task'],
+                                use_time=True,
+                                use_numeric=False,
+                                split='test')
+    cfg = ConfigClass(
+        vocab_size=seq_gen.tokenizer.vocab_size,
+        cls_token_id=seq_gen.tokenizer.cls_id,
+        pad_token_id=seq_gen.tokenizer.pad_id,
+        type_vocab_size=28,
+        visit_vocab_size=102,
+        stage_vocab_size=5,
+        refernece_compile=False)
+    model = EvalModel(config=cfg,
+                        backnone=ModelClass,
+                        ckpt_path=config['ckpt_path'],
+                        lr=learning_rate,
+                        wd=0.0,
+                        max_epochs=75,
+                        pooling='cls',
+                        use_numeric=False,
+                        use_time=True,
+                        freeze=False,
+                        optimizer='sgd')
+
 elif config['backbone_name'] in ['roberta','longformer','big_bird','roformer','modernbert']:
     ConfigClass, ModelClass = get_config_and_model_cls(config['backbone_name'], mode='eval', variant=None)
 
