@@ -28,7 +28,7 @@ This conversion transforms the original tables into a consistent timeline repres
 We leverage the official MEDS export tool available for MIMIC-IV V3.1, [MIMIC_IV_MEDS](https://github.com/Medical-Event-Data-Standard/MIMIC_IV_MEDS/tree/main/src/MIMIC_IV_MEDS)
 
 # Experiments
-We provide the code for submission purposes, Exact training and evaluation configuration files will be uploaded upon acceptance 
+We provide the code for submission purposes. Exact training and evaluation configuration files will be uploaded upon acceptance. They are removed to avoid any identity-revealing information that can be forgotten upon submission. 
 ## Pretraining
 
 To run pretraining experiments
