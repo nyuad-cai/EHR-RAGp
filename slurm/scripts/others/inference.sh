@@ -10,10 +10,6 @@
 #SBATCH  --gres=gpu:a100:1
 #SBATCH  --constraint=80g
 
-#SBATCH -q shamout
-##SBATCH  -q nvidia-xxl
-##SBATCH -q cair
-#SBATCH --reservation=shamout
 
 
 eval "$(conda shell.bash hook)"
