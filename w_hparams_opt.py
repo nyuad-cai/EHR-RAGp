@@ -283,7 +283,7 @@ def main():
 
     study = optuna.create_study(study_name=config['backbone_name'],
                                 direction="minimize", 
-                                storage=f'sqlite:////scratch/sas10092/ehr-foundation/models/optuna_dbs/with_retrieval/{config["backbone_name"]}_{config["dataset"]["task"]}_2.db',
+                                storage=f'/path/to',
                                 pruner=pruner,
                                 load_if_exists=True,
                                 sampler=TPESampler(seed=24))
