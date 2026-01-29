@@ -543,7 +543,7 @@ pruner = optuna.pruners.NopPruner()
 
 study = optuna.create_study(study_name=config['backbone_name'],
                             direction="minimize", 
-                            storage=f'sqlite:////scratch/sas10092/ehr-foundation/models/optuna_dbs/{config["backbone_name"]}_{mode}_{config["task"]}.db',
+                            storage=f'/path/to',
                             pruner=pruner,
                             load_if_exists=True,
                             sampler=TPESampler())
