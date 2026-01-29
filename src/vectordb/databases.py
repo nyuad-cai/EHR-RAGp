@@ -15,51 +15,56 @@ from typing import List, Dict, Union, Optional
 from chromadb.api.types import Documents, Embeddings, EmbeddingFunction
 
 
-class RoformerEHREmbedder(nn.Module):
 
+class EHREmbedder(nn.Module):
     def __init__(
         self,
         config,
+        backbone,
+        ckpt_path: Optional[str] = None,
         dropout: float = 0.1,
-        ckpt_path: str = None,   
-        pool: str = "cls",              
-        attn_pool_dim: int = 128,       
-        normalize: bool = False,         
-        device: str = "cuda" if torch.cuda.is_available() else "cpu",
-        dtype: torch.dtype = torch.float32
+        pooling: str = "cls",
+        normalize: bool = False,
+        use_numeric: bool = False, # not to be used, but implemenetd for future research, Keep always False
+        use_time: bool = False, # not to be used, but implemenetd for future research, Keep always False
+        device: Optional[str] = None,
+        dtype: torch.dtype = torch.float32,
     ):
         super().__init__()
         self.config = config
-        self.pool = pool
+        self.pooling = pooling
         self.normalize = normalize
-        self.device_ = device
         self.dtype_ = dtype
-
-        # backbone without classification head
-        self.backbone = RoFormerModel(self.config)
-
-        # plug in your custom input embedding layer
-        self.backbone.embeddings = EHREmbeddings(
+        self.device_ = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.backbone = backbone(config)
+        self.use_time = use_time
+        self.use_numeric = use_numeric
+        
+        if self.use_time or self.use_numeric:
+            raise ValueError("not to be used, but implemenetd for future research, Keep always False")
+            
+        rope_model_types = {"modernbert", "roformer"}
+        model_type = getattr(config, "model_type", "").lower()
+        is_rope = model_type in rope_model_types
+        
+        self.ehr_embeddings = EHREmbeddings(
             vocab_size=config.vocab_size,
-            embedding_size=config.embedding_size,
+            embedding_size=getattr(config, "hidden_size", getattr(config, "embedding_size")),
             pad_token_id=config.pad_token_id,
             type_vocab_size=config.type_vocab_size,
             visit_vocab_size=config.visit_vocab_size,
             stage_vocab_size=config.stage_vocab_size,
-            dropout=dropout
+            dropout=dropout,
+            use_position_embeddings=not is_rope,
+            max_position_embeddings=(getattr(config, "max_position_embeddings", 0) if not is_rope else 0),
+            use_time=self.use_time,
+            time_in_features=1,
+            time_out_features=16,
+            use_numeric=self.use_numeric,
         )
 
-        # optional attentive pooling
-#         if self.pool == "attn":
-#             self.attn_pool = nn.Sequential(
-#                 nn.Linear(self.config.hidden_size, attn_pool_dim, bias=True),
-#                 nn.Tanh(),
-#                 nn.Linear(attn_pool_dim, 1, bias=False)
-#             )
-
-        # load weights (either full HF state_dict or your Lightning ckpt)
         if ckpt_path:
-            self.get_pretrained_weights(backbone= self.backbone, ckpt_path = ckpt_path)
+            self.load_pretrained_weights(ckpt_path)
 
         self.eval().to(self.device_, dtype=self.dtype_)
 
@@ -71,82 +76,90 @@ class RoformerEHREmbedder(nn.Module):
         type_ids: torch.Tensor,
         visit_ids: torch.Tensor,
         stage_ids: torch.Tensor,
-        pad_token_id: int = 0
+        time_feats: Optional[torch.Tensor] = None,
+        numeric_values: Optional[torch.Tensor] = None,
+        numeric_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """
-        Returns [B, D] embeddings.
-        """
-        # Build inputs_embeds via your EHREmbeddings.encode
-        inputs_embeds = self.backbone.embeddings.encode(
+        if (time_feats is not None) or (numeric_values is not None) or (numeric_mask is not None):
+            raise ValueError(
+                "EHREmbedder.encode: time/numeric tensors were passed but are disabled. "
+                "Pass None for time_feats/numeric_values/numeric_mask.")
+        
+        inputs_embeds = self.ehr_embeddings.encode(
             input_ids=input_ids.to(self.device_),
             type_ids=type_ids.to(self.device_),
             visit_ids=visit_ids.to(self.device_),
-            stage_ids=stage_ids.to(self.device_)
-        ).to(self.dtype_)
+            stage_ids=stage_ids.to(self.device_),
+            time_feats=(time_feats.to(self.device_) if time_feats is not None else None),
+            numeric_values=(numeric_values.to(self.device_) if numeric_values is not None else None),
+            numeric_mask=(numeric_mask.to(self.device_) if numeric_mask is not None else None)).to(self.dtype_)
 
         outputs = self.backbone(
             inputs_embeds=inputs_embeds,
-            attention_mask=attention_mask.to(self.device_)
+            attention_mask=attention_mask.to(self.device_),
+            output_hidden_states=False,
+            return_dict=True,
         )
-        # candidates: last_hidden_state, pooled_output (if available)
-        last_hidden = outputs.last_hidden_state  # [B, L, H]
+        last_hidden = outputs.last_hidden_state  
 
-        if self.pool == "cls":
-            vec = last_hidden[:, 0, :]  # [CLS]-style
-        elif self.pool == "mean":
-            # mask-aware mean pooling
-            mask = attention_mask.unsqueeze(-1).to(last_hidden.dtype)  # [B,L,1]
+        if self.pooling == "cls":
+            vec = last_hidden[:, 0, :]
+        elif self.pooling == "mean":
+            mask = attention_mask.unsqueeze(-1).to(device=last_hidden.device,dtype=last_hidden.dtype) 
             vec = (last_hidden * mask).sum(dim=1) / (mask.sum(dim=1).clamp(min=1.0))
-#         else:  # attn
-#             scores = self.attn_pool(last_hidden).squeeze(-1)         # [B,L]
-#             scores = scores.masked_fill(attention_mask == 0, -1e9)
-#             w = torch.softmax(scores, dim=-1).unsqueeze(-1)          # [B,L,1]
-#             vec = (last_hidden * w).sum(dim=1)                        # [B,H]
+        else:
+            raise ValueError(f"Unsupported pooling='{self.pooling}' (use 'cls' or 'mean')")
 
         if self.normalize:
             vec = nn.functional.normalize(vec, p=2, dim=-1)
-        return vec  # [B, H]
-    
-    def get_pretrained_weights(self,
-                               backbone: nn.Module,
-                               ckpt_path: str):
-        sd = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-        if isinstance(sd, dict) and "state_dict" in sd:
-            sd = sd["state_dict"]
+        return vec
 
-        new_sd = {}
+    def load_pretrained_weights(self, ckpt_path: str) -> None:
+        sd_obj = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        sd = sd_obj["state_dict"] if isinstance(sd_obj, dict) and "state_dict" in sd_obj else sd_obj
+
+        mt = getattr(self.config, "model_type", "").lower()
+        prefix_map = {
+            "bert":       "backbone.bert.",
+            "roberta":    "backbone.roberta.",
+            "longformer": "backbone.longformer.",
+            "modernbert": "backbone.model.",
+            "roformer":   "backbone.roformer.",
+            "big_bird":   "backbone.bert.",
+            "mamba":      "backbone.backbone.",
+            "mamba2":     "backbone.backbone."}
+        backbone_prefix = prefix_map.get(mt, None)
+
+        DROP_PREFIXES = ["backbone.cls.", "top_1_train.", "top_1_val.", "backbone.lm_head.", 
+                         "classifier.", "cls.", "lm_head.", "score."]
+        remapped = {}
         for k, v in sd.items():
-            # drop non-backbone heads
-            if k.startswith(("cls.", "lm_head.", "classifier.", "score.")):
+            if any(k.startswith(dp) for dp in DROP_PREFIXES):
                 continue
-            # strip leading "backbone."
-            if k.startswith("backbone."):
-                k = k[len("backbone."):]
-            # map "roformer." -> "" (RoFormerModel params live at root)
-            if k.startswith("roformer."):
-                k = k[len("roformer."):]
-            new_sd[k] = v
 
-        # keep only keys that actually exist in target
-        target_keys = set(backbone.state_dict().keys())
-        filtered = {k: v for k, v in new_sd.items() if k in target_keys}
+            if k.startswith("ehr_embeddings."):
+                new_k = k
+            elif backbone_prefix and k.startswith(backbone_prefix):
+                new_k = "backbone." + k[len(backbone_prefix):]
+            elif k.startswith("backbone."):
+                new_k = k
+            else:
+                new_k = k
 
-        print(f"keeping {len(filtered)}/{len(new_sd)} keys")
-        missing, unexpected = backbone.load_state_dict(filtered, strict=False)
-        print("Loaded with:", {"missing": missing, "unexpected": unexpected})
+            remapped[new_k] = v
+        missing, unexpected = self.load_state_dict(remapped, strict=False)
+        print("Embedder weights loaded.")
+        print("missing keys:", missing)
+        print("unexpected keys:", unexpected)
 
 
 class EmbedCollator:
     def __init__(self) -> None:
-        pass
-
+        self.embed_keys = ("input_ids", "attention_mask", "visit_ids", "stage_ids", "type_ids")
 
     def __call__(self, batch: List[Union[Dict, List[Dict]]]) -> Dict[str, torch.Tensor]:
         chunks = self._flatten(batch)
-        out = self._stack(chunks)
-        
-        return out
-
+        return self._stack(chunks)
 
     def _flatten(self, batch) -> List[Dict]:
         out = []
@@ -162,64 +175,70 @@ class EmbedCollator:
         return out
 
     def _stack(self, chunks: List[Dict]) -> Dict[str, torch.Tensor]:
-        keys = list(chunks[0].keys())
         out = {}
-        for k in keys:
-            # Skip known non-numeric or variable-shaped fields
-            if k in ("text_values",):  # add others you don't want to collate
-                continue
-
-            # Replace Nones with safe defaults
+        for k in self.embed_keys:
             seq_list = []
             for c in chunks:
-                v = c[k]
+                v = c.get(k, None)
                 if isinstance(v, list):
-                    v = [0 if x is None else x for x in v]  # 0 for ints/floats
+                    v = [0 if x is None else x for x in v]
                 elif v is None:
-                    # single value case (shouldn't happen for sequences, but guard anyway)
                     v = 0
                 seq_list.append(torch.as_tensor(v))
             out[k] = torch.stack(seq_list, 0)
         return out
     
 
-class ChromaEHREmbeddingFunction(EmbeddingFunction[Documents]):
+
+class ChromaEHREmbeddingFunction:
     def __init__(self, embedder, collate_fn, batch_size: Optional[int] = None):
         self.embedder = embedder
         self.collate_fn = collate_fn
-        self.batch_size = batch_size  # None => all at once
+        self.batch_size = batch_size 
 
     def _decode_docs(self, docs: Documents):
-        """Accept raw dicts or JSON strings; preserve list-of-lists (patients→chunks)."""
         out: List[Union[dict, list]] = []
         for item in docs:
             if isinstance(item, str):
-                out.append(json.loads(item))                     # JSON → dict
+                out.append(json.loads(item))
             elif isinstance(item, (list, tuple)):
                 out.append([json.loads(x) if isinstance(x, str) else x for x in item])
             else:
-                out.append(item)                                 # dict
+                out.append(item)
         return out
 
     def _slice_batch(self, batch_tensors: Dict[str, torch.Tensor], sl: slice) -> Dict[str, torch.Tensor]:
-        keys = ("input_ids", "attention_mask", "type_ids", "visit_ids", "stage_ids")
-        return {k: batch_tensors[k][sl] for k in keys if k in batch_tensors}
-
-    def __call__(self, docs: Documents) -> Embeddings:
-        # 1) Handle both cases: dicts (upsert) or JSON strings (retrieval)
-        docs = self._decode_docs(docs)
-
-        # 2) Collate to tensors
-        batch_inputs = self.collate_fn(docs)  # -> dict of tensors [B, L]
-
-        # 3) Device/dtype
+        # Required
+        keys = ["input_ids", "attention_mask", "type_ids", "visit_ids", "stage_ids"]
+        # Optional (only pass if present)
+        for opt in ["time_diff", "numeric_values", "numeric_mask"]:
+            if opt in batch_tensors:
+                keys.append(opt)
+        return {k: batch_tensors[k][sl] for k in keys}
+    
+    def name(self) -> str:
+        return self.embedder.config.model_type
+    
+    def __call__(self, input: Documents) -> Embeddings:
+        # 1) Decode JSON if needed
+        docs = self._decode_docs(input)
+        batch_inputs = self.collate_fn(docs)
         device = getattr(self.embedder, "device_", "cpu")
-        for k in ("input_ids", "attention_mask", "type_ids", "visit_ids", "stage_ids"):
+
+        req_long = ["input_ids", "attention_mask", "type_ids", "visit_ids", "stage_ids"]
+        
+        for k in req_long:
             if k not in batch_inputs:
                 raise KeyError(f"Missing required key '{k}' in collated batch.")
             batch_inputs[k] = batch_inputs[k].to(device=device, dtype=torch.long)
 
-        # 4) Encode (optional mini-batching)
+        if "time_diff" in batch_inputs:
+            batch_inputs["time_diff"] = batch_inputs["time_diff"].to(device=device)
+        if "numeric_values" in batch_inputs:
+            batch_inputs["numeric_values"] = batch_inputs["numeric_values"].to(device=device)
+        if "numeric_mask" in batch_inputs:
+            batch_inputs["numeric_mask"] = batch_inputs["numeric_mask"].to(device=device)
+
         B = batch_inputs["input_ids"].size(0)
         bs = self.batch_size or B
 
@@ -234,6 +253,9 @@ class ChromaEHREmbeddingFunction(EmbeddingFunction[Documents]):
                     type_ids=sub["type_ids"],
                     visit_ids=sub["visit_ids"],
                     stage_ids=sub["stage_ids"],
+#                     time_feats=sub.get("time_diff", None), uncomment if use time is true and want it to be embedded
+#                     numeric_values=sub.get("numeric_values", None), Same above
+#                     numeric_mask=sub.get("numeric_mask", None), same above
                 )
                 embs_out.append(v.detach().cpu())
 
@@ -241,87 +263,136 @@ class ChromaEHREmbeddingFunction(EmbeddingFunction[Documents]):
     
 
 
-
-
-
-
-
 class VectorDBUploader:
-    def __init__(self,
-                 collection,
-                 seq_gen: SequencesGenerator,
-                 main_window: str,
-                 seq_length: int,
-                 limits: dict,
-                 data_idx_path: str,
-                 data_path: str,
-                 needed_cols: list = ['subject_id', 'input_ids', 'attention_mask', 'visit_ids', 'stage_ids', 'type_ids']
-                 ):
-        # Initialize client and collection
-
+    def __init__(
+        self,
+        collection,
+        seq_gen,
+        main_window: str,
+        seq_length: int,
+        limits: dict,
+        data_idx_path: str,
+        data_path: str,
+        use_time: bool = False, # set as true for values storage only
+        use_numeric: bool = False, # set as true for values storage only
+        add_cls_per_chunk: bool = True,
+        needed_cols: list = None,
+    ):
         self.collection = collection
-        # Initialize sequence generator
         self.seq_gen = seq_gen
-
-        # Store parameters
         self.main_window = main_window
         self.seq_length = seq_length
         self.limits = limits
-        self.needed_cols = needed_cols
+        self.use_time = use_time 
+        self.use_numeric = use_numeric
+        self.add_cls_per_chunk = add_cls_per_chunk
 
-        # Load index and dataset
+        if needed_cols is None:
+            needed_cols = ["subject_id", "input_ids", "attention_mask", "visit_ids", "stage_ids", "type_ids"]
+            
+            if self.use_time :
+                needed_cols.append("time_diff")
+            if self.use_numeric:
+                needed_cols += ["numeric_values", "numeric_mask"]
+                
+        self.needed_cols = needed_cols
+        
+        
         self.data_idx = pl.read_parquet(data_idx_path)
         sub_ids = set(self.data_idx.get_column("subject_id").to_list())
-        hf_dataset = load_from_disk(data_path)
 
-        # Filter dataset to match index subjects
+        hf_dataset = load_from_disk(data_path)
         hf_dataset = hf_dataset.filter(
             lambda sids: [sid in sub_ids for sid in sids],
             batched=True,
-            input_columns="subject_id",
-        )
+            input_columns="subject_id")
 
-        # Format and subset dataset
-        hf_dataset = (
-            hf_dataset
-            .flatten_indices()
-            .select_columns(self.needed_cols)
-            .with_format("numpy", columns=self.needed_cols, output_all_columns=False)
-        )
+        self.hf_dataset = (hf_dataset
+                           .flatten_indices()
+                           .select_columns(self.needed_cols)
+                           .with_format("numpy", columns=self.needed_cols, 
+                                        output_all_columns=False))
 
-        self.hf_dataset = hf_dataset
         self.index = self._build_index()
 
     def _build_index(self):
-        """Build subject_id → list of indices mapping."""
         sids = self.hf_dataset["subject_id"]
         index = defaultdict(list)
         for i, sid in enumerate(sids):
             index[sid].append(i)
         return index
 
+    def _to_list(self, v):
+        if isinstance(v, np.ndarray):
+            return v.tolist()
+        if isinstance(v, list):
+            return v
+        return v
+
+#     def _ensure_optional_fields(self, chunk: dict):
+#         L = len(chunk["input_ids"])
+#         if self.use_time:
+#             if "time_diff" not in chunk or chunk["time_diff"] is None:
+#                 chunk["time_diff"] = [0.0] * L
+#             else:
+#                 chunk["time_diff"] = [0.0 if x is None else float(x) for x in chunk["time_diff"]]
+#         if self.use_numeric:
+#             if "numeric_values" not in chunk or chunk["numeric_values"] is None:
+#                 chunk["numeric_values"] = [0.0] * L
+#             else:
+#                 chunk["numeric_values"] = [0.0 if x is None else float(x) for x in chunk["numeric_values"]]
+#             if "numeric_mask" not in chunk or chunk["numeric_mask"] is None:
+#                 chunk["numeric_mask"] = [0] * L
+#             else:
+#                 chunk["numeric_mask"] = [0 if x is None else int(x) for x in chunk["numeric_mask"]]
+
+#         return chunk
+
     def upsert_chunks(self):
-        """Iterate over data_idx and upload encoded chunks to ChromaDB."""
-        for i in tqdm(range(len(self.data_idx))):
-            stay = self.data_idx[i]
-            split = stay['split'][0]
-            subject_id = stay['subject_id'][0]
-            start = self.limits[self.main_window][self.seq_length][0]
-            end = stay[self.limits[self.main_window][self.seq_length][1]][0]
+        for row_idx in tqdm(range(len(self.data_idx))):
+            stay = self.data_idx[row_idx]
+            split = stay["split"][0]
+            
+            subject_id = stay["subject_id"][0]
+            
+            start_key_or_int = self.limits[self.main_window][self.seq_length][0]
+            end_key = self.limits[self.main_window][self.seq_length][1]
+            
+            start = stay[start_key_or_int][0] if isinstance(start_key_or_int, str) else int(start_key_or_int)
+            end = stay[end_key][0] if isinstance(end_key, str) else int(end_key)
+            
             timeline_encoded = self.hf_dataset.select(self.index[subject_id])[0]
+            
+            history_window = {k: self._to_list(v) for k, v in timeline_encoded.items()}
+            history_window = {k: (v[start:end] if isinstance(v, list) else v) for k, v in history_window.items()}
+            
+            chunks = self.seq_gen.get_overlapped_chunks(history_window,
+                                                        add_cls_per_chunk=self.add_cls_per_chunk)
+            docs, ids, metas = [], [], []
+            
+            for ci, ch in enumerate(chunks):
+#                 ch = self._ensure_optional_fields(ch)
+                doc_dict = {"input_ids": ch["input_ids"],
+                            "attention_mask": ch["attention_mask"],
+                            "visit_ids": ch["visit_ids"],
+                            "stage_ids": ch["stage_ids"],
+                            "type_ids": ch["type_ids"]}
+                docs.append(json.dumps(doc_dict, separators=(",", ":")))
+                ids.append(f"{subject_id}__{row_idx:06d}__{ci:04d}")
+                meta = {"subject_id": int(subject_id),
+                        "stay_row": int(row_idx),
+                        "chunk_idx": int(ci),
+                        "split": str(split),
+                        "window": str(self.main_window),
+                        "seq_length": int(self.seq_length),}
 
-            # Slice history window
-            history_window = {
-                k: (v[start:end].tolist() if isinstance(v, (list, np.ndarray)) else v)
-                for k, v in timeline_encoded.items()
-            }
+                if self.use_time:
+                    meta["time_diff"] = json.dumps(ch["time_diff"], separators=(",", ":"))
+                if self.use_numeric:
+                    meta["numeric_values"] = json.dumps(ch["numeric_values"], separators=(",", ":"))
+                    meta["numeric_mask"] = json.dumps(ch["numeric_mask"], separators=(",", ":"))
 
-            # Generate chunks and metadata
-            chunks = self.seq_gen.get_overlapped_chunks(history_window)
-            docs = [json.dumps(ch, separators=(",", ":")) for ch in chunks]
-            ids = [f"{subject_id}__{i:05d}" for i in range(len(chunks))]
-            metas = [{"subject_id": subject_id, "chunk_idx": i, "split": split} for i in range(len(chunks))]
+                metas.append(meta)
 
-            # Upload to Chroma
             self.collection.upsert(ids=ids, documents=docs, metadatas=metas)
-            del(chunks, docs, ids, metas, timeline_encoded,history_window)  # free memory
+            del timeline_encoded, history_window, chunks, docs, ids, metas

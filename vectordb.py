@@ -5,9 +5,10 @@ import chromadb
 
 import lightning.pytorch as lt 
 
-from transformers import RoFormerConfig  
+from transformers import RoFormerConfig, RoFormerModel  
 from src.data.datasets import SequencesGenerator, limits
-from src.vectordb.databases import RoformerEHREmbedder, EmbedCollator, ChromaEHREmbeddingFunction, VectorDBUploader
+from src.vectordb.databases import EHREmbedder, EmbedCollator, ChromaEHREmbeddingFunction, VectorDBUploader
+from src.models.utils import load_config_with_env
 
 
 lt.seed_everything(24, workers=True)
@@ -19,18 +20,6 @@ parser.add_argument('--config-path', type=str)
 args = parser.parse_args()
 
 
-
-def load_config_with_env(path):
-    # read file
-    with open(path, "r") as f:
-        raw_text = f.read()
-
-    # expand any ${VAR} with environment values
-    expanded = os.path.expandvars(raw_text)
-    
-    # load yaml
-    return yaml.safe_load(expanded)
-
 config = load_config_with_env(args.config_path)
 
 
@@ -39,8 +28,7 @@ seq_gen = SequencesGenerator(
             chunk_length=config['seq_length'],
             overlap=config['overlap'],
             return_numeric=False,
-            return_text=False
-        )
+            return_text=False)
 
 
 cfg = RoFormerConfig(vocab_size=seq_gen.tokenizer.vocab_size,
@@ -48,18 +36,21 @@ cfg = RoFormerConfig(vocab_size=seq_gen.tokenizer.vocab_size,
                         num_hidden_layers=12,
                         num_attention_heads=12,
                         intermediate_size=3072,
-                        max_position_embeddings=config['seq_length'],
+                        max_position_embeddings=1536,
                         pad_token_id=seq_gen.tokenizer.pad_id,
                         type_vocab_size= 28,
                         visit_vocab_size= 102,
                         stage_vocab_size= 5)
 
 
-embedder = RoformerEHREmbedder(
+embedder = EHREmbedder(
     config=cfg,
+    backbone=RoFormerModel,
     ckpt_path=config['ckpt_path'],
-    pool=config['embedder']['pool'],                        
-    normalize=False)
+    pooling=config['embedder']['pool'],                        
+    normalize=True,
+    use_numeric=False,
+    use_time=False,)
 
 collate_fn = EmbedCollator()
 
@@ -75,10 +66,7 @@ collection = client.get_or_create_collection(
             metadata={"seq_length": config['seq_length'],
                       "overlap": config['overlap'],},
             configuration={"hnsw": {"space": "cosine",
-                                    "ef_construction": 200}
-                            }
-            
-        )
+                                    "ef_construction": 200}})
 
 
 
@@ -91,7 +79,9 @@ uploader = VectorDBUploader(
     limits=limits,
     data_idx_path=config['dataset']['data_idx_path'],
     data_path=config['dataset']['data_path'],
-)
+    use_time=True,
+    use_numeric=True,
+    add_cls_per_chunk=True)
 
 uploader.upsert_chunks()
 print(f"Finished uploading to vectordb {collection.name}.")

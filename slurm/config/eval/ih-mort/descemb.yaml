@@ -1,5 +1,5 @@
 task: y_mort
-backbone_name: genhpf
+backbone_name: descemb
 main_window: within48_descemb
 version: baslines
 job_id: ${SLURM_JOB_ID}

@@ -8,7 +8,6 @@ import argparse
 import lightning.pytorch as lt
 
 from types import SimpleNamespace
-from optuna.samplers import TPESampler
 from torch.utils.data import DataLoader
 from src.models.models import EvalModel
 from lightning.pytorch.loggers import WandbLogger
@@ -41,12 +40,12 @@ else:
     mode = 'final'
 
 
-learning_rate = 0.000683
-weight_decay = False
-pooling = 'cls' 
-use_numeric = True    
-dropout = False
-
+learning_rate = 0.000012680316113284
+weight_decay = 0
+pooling = '' 
+use_numeric = False    
+dropout = 0.5
+ 
 
 
 if config['backbone_name'] == 'bert' and config['variant'] == 'hibehrt':

@@ -5,10 +5,14 @@
 #SBATCH  -N 1
 #SBATCH  -p nvidia
 #SBATCH  --gres=gpu:a100:1
-#SBATCH  --constraint=80g
 #SBATCH  -c 32
 #SBATCH  -o ./slurm/logs/%x.%J.out
 #SBATCH  -e ./slurm/logs/%x.%J.err
+
+
+#SBATCH  -q shamout
+#SBATCH  --constraint=80g
+##SBATCH  -q nvidia-xxl
 
 #--gres=gpu:1
 # -q nvidia-xxl

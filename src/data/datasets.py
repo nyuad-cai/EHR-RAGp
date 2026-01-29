@@ -3,7 +3,7 @@ import os
 import json
 import torch
 import bisect
-
+import chromadb
 import numpy as np
 import polars as pl
 
@@ -890,28 +890,23 @@ class EvalCollator:
         chunks = self._flatten(batch)
         out = self._stack(chunks)
 
-        # ---- CLEAN NUMERIC VALUES ----
         if "numeric_values" in out:
-            vals = out["numeric_values"].float()          # [B, L]
-            finite_mask = torch.isfinite(vals)            # True where not NaN/inf
+            vals = out["numeric_values"].float()          
+            finite_mask = torch.isfinite(vals)           
 
-            # if numeric_mask already exists, AND it with finite_mask
             if "numeric_mask" in out:
                 mask = out["numeric_mask"].bool() & finite_mask
             else:
                 mask = finite_mask
 
-            # replace NaN/inf with 0.0 (or any neutral value)
             vals = torch.nan_to_num(vals, nan=0.0, posinf=0.0, neginf=0.0)
 
             out["numeric_values"] = vals
             out["numeric_mask"] = mask
-
-#         # ---- OPTIONAL: CLEAN TIME FEATURES TOO ----
-#         if "time_diff" in out:
-#             t = out["time_diff"].float()
-#             t = torch.nan_to_num(t, nan=0.0, posinf=0.0, neginf=0.0)
-#             out["time_diff"] = t
+        if "time_diff" in out:
+            t = out["time_diff"].float()
+            t = torch.nan_to_num(t, nan=0.0, posinf=0.0, neginf=0.0)
+            out["time_diff"] = t
 
         return out
 
@@ -932,8 +927,8 @@ class EvalCollator:
         keys = list(chunks[0].keys())
         out = {}
         for k in keys:
-            # Skip known non-numeric or variable-shaped fields
-            if k in ("text_values",):  # add others you don't want to collate
+
+            if k in ("text_values",):  
                 continue
 
             seq_list = []
@@ -947,6 +942,268 @@ class EvalCollator:
             out[k] = torch.stack(seq_list, 0)
         return out
 
+
+
+
+
+class RetrievalEvalDataset(Dataset):
+    def __init__(
+        self,
+        dataset_path: str,
+        data_idx_path: str,
+        seq_gen,
+        limits_dict: dict,
+        vectordb_path: str,
+        embedder,
+        collate_fn,
+        task: str = "y_mort",
+        main_window: str = "within48_query",
+        seq_length: int = 512,
+        top_k: int = 8,
+        where_extra: Optional[dict] = None,
+        use_time: bool = False,
+        use_numeric: bool = False,
+        add_cls: bool = True,
+        split: str = "train",
+    ):
+        super().__init__()
+        self.seq_gen = seq_gen
+        self.limits_dict = limits_dict
+        self.task = task
+        self.main_window = main_window
+        self.seq_length = seq_length
+        self.top_k = top_k
+        self.where_extra = where_extra or {}
+        self.use_time = use_time
+        self.use_numeric = use_numeric
+        self.add_cls = add_cls
+
+        self.embedder = embedder
+        self.collate_fn = collate_fn
+
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        device = torch.device(f"cuda:{local_rank}")
+        self.embedder.to(device)
+
+        self.start_limit = limits_dict[main_window][seq_length][0]
+        self.end_limit = limits_dict[main_window][seq_length][1]
+
+        self.data_idx = pl.scan_parquet(data_idx_path).collect()
+        self.data_idx = self.data_idx.filter(pl.col("split") == split)
+
+        needed_cols = ["subject_id", "input_ids", "attention_mask", "visit_ids", "stage_ids", "type_ids"]
+        if use_time:
+            needed_cols.append("time_diff")
+        if use_numeric:
+            needed_cols += ["numeric_values", "numeric_mask"]
+
+        sub_ids = set(self.data_idx.get_column("subject_id").to_list())
+        hf_dataset = load_from_disk(dataset_path)
+        hf_dataset = hf_dataset.filter(
+            lambda sids: [sid in sub_ids for sid in sids],
+            batched=True,
+            input_columns="subject_id",
+        )
+
+        self.hf_dataset = (
+            hf_dataset.flatten_indices()
+            .select_columns(needed_cols)
+            .with_format("numpy", columns=needed_cols, output_all_columns=False)
+        )
+
+        sids = self.hf_dataset["subject_id"]
+        self.index = defaultdict(list)
+        for i, sid in enumerate(sids):
+            self.index[sid].append(i)
+
+        self.vectordb_path = vectordb_path
+        self._chroma_collection_name: Optional[str] = None
+
+        self._client = None
+        self._collection = None
+
+    def __len__(self) -> int:
+        return len(self.data_idx)
+
+    @staticmethod
+    def _to_py(v):
+        if isinstance(v, np.ndarray):
+            return v.tolist()
+        return v
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_client"] = None
+        state["_collection"] = None
+        return state
+
+    def _init_vectordb(self) -> None:
+        if self._collection is not None:
+            return
+
+        self._client = chromadb.PersistentClient(path=self.vectordb_path)
+        if self._chroma_collection_name is None:
+            cols = self._client.list_collections()
+            if len(cols) != 1:
+                raise ValueError(
+                    f"Expected 1 collection in {self.vectordb_path}, found {len(cols)}"
+                )
+            self._chroma_collection_name = cols[0].name
+
+        self._collection = self._client.get_collection(name=self._chroma_collection_name)
+        
+        
+    def _strip_query_features(self, chunk: dict) -> dict:
+        drop_keys = []
+        if self.use_time:
+            drop_keys.append("time_diff")
+        if self.use_numeric:
+            drop_keys.extend(["numeric_values", "numeric_mask"])
+
+        return {k: v for k, v in chunk.items() if k not in drop_keys}
+    
+
+        
+
+    def _embed_query_chunk(self, query_chunk: dict) -> List[float]:
+        batch = self.collate_fn([query_chunk])
+        device = next(self.embedder.parameters()).device
+
+        for k, v in list(batch.items()):
+            if torch.is_tensor(v):
+                batch[k] = v.to(device, non_blocking=True)
+
+        input_ids = batch["input_ids"]
+        attention_mask = batch["attention_mask"]
+        type_ids = batch["type_ids"]
+        visit_ids = batch["visit_ids"]
+        stage_ids = batch["stage_ids"]
+
+        time_feats = batch.get("time_diff", None) if self.use_time else None
+        numeric_values = batch.get("numeric_values", None) if self.use_numeric else None
+        numeric_mask = batch.get("numeric_mask", None) if self.use_numeric else None
+
+        with torch.no_grad():
+            vec = self.embedder.encode(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                type_ids=type_ids,
+                visit_ids=visit_ids,
+                stage_ids=stage_ids,
+                time_feats=time_feats,
+                numeric_values=numeric_values,
+                numeric_mask=numeric_mask,
+            ) 
+
+        return vec[0].detach().cpu().tolist()
+
+    def _query_vectordb(self, subject_id: int, query_chunk: dict) -> List[dict]:
+        self._init_vectordb() 
+        
+        
+        retrieval_query = self._strip_query_features(query_chunk)
+        
+        qvec = self._embed_query_chunk(retrieval_query)
+
+        where = {"subject_id": int(subject_id)}
+        where.update(self.where_extra)
+
+        res = self._collection.query(
+            query_embeddings=[qvec],
+            n_results=self.top_k,
+            where=where,
+            include=["documents", "metadatas", "distances"],
+        )
+
+        docs = res.get("documents", [[]])[0]
+        metas = res.get("metadatas", [[]])[0]
+        dists = res.get("distances", [[]])[0]
+
+        out = []
+        for doc, meta, dist in zip(docs, metas, dists):
+            ch = json.loads(doc) if isinstance(doc, str) else doc
+            if self.use_time:
+                ch["time_diff"] = json.loads(meta["time_diff"])
+            if self.use_numeric:
+                ch["numeric_values"] = json.loads(meta["numeric_values"])
+                ch["numeric_mask"] = json.loads(meta["numeric_mask"])
+            # ch["_retrieval_meta"] = {"distance": float(dist), "metadata": meta}
+            out.append(ch)
+        return out
+
+    def __getitem__(self, idx: int) -> Dict[str, Any]:
+        stay = self.data_idx[idx]
+        subject_id = int(stay["subject_id"][0])
+        label = float(stay[self.task][0])
+
+        start = stay[self.start_limit][0] if isinstance(self.start_limit, str) else int(self.start_limit)
+        end = stay[self.end_limit][0] if isinstance(self.end_limit, str) else int(self.end_limit)
+
+        timeline_encoded = self.hf_dataset.select(self.index[subject_id])[0]
+        timeline_encoded = {k: self._to_py(v) for k, v in timeline_encoded.items()}
+
+        query_window = {
+            k: (v[start:end] if isinstance(v, list) else v)
+            for k, v in timeline_encoded.items()
+        }
+
+        query_chunks = self.seq_gen.get_overlapped_chunks(
+            query_window,
+            chunk_length=self.seq_length,
+            overlap=0,
+            add_cls_per_chunk=self.add_cls,
+        )
+        query_chunk = query_chunks[0]
+
+        history = self._query_vectordb(subject_id=subject_id, query_chunk=query_chunk)
+
+        return {
+            "query": query_chunk,
+            "history": history,
+            "label": label,
+            # "meta": {"subject_id": subject_id, "idx": int(idx)},
+        }
+    
+class RetrievalCollator:
+    def __init__(self, chunk_collator, top_k: int):
+        self.chunk_collator = chunk_collator
+        self.top_k = top_k
+
+    def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+        query_chunks = [b["query"] for b in batch]
+        q = self.chunk_collator(query_chunks) 
+
+        retrieved_lists = [b["history"] for b in batch]
+
+        for i in range(len(retrieved_lists)):
+            if len(retrieved_lists[i]) == 0:
+                template = query_chunks[0]
+            else:
+                template = retrieved_lists[i][0]  
+
+            if len(retrieved_lists[i]) < self.top_k:
+                z = {
+                    k: ([0] * len(template[k]) if isinstance(template[k], list) else 0)
+                    for k in template.keys()
+                }
+                retrieved_lists[i] = retrieved_lists[i] + [z] * (self.top_k - len(retrieved_lists[i]))
+            elif len(retrieved_lists[i]) > self.top_k:
+                retrieved_lists[i] = retrieved_lists[i][:self.top_k]
+
+        flat_retrieved = [ch for lst in retrieved_lists for ch in lst]
+        r_flat = self.chunk_collator(flat_retrieved) 
+
+        B = len(batch)
+        K = self.top_k
+        r = {}
+        for k, v in r_flat.items():
+            if v.dim() == 2:
+                r[k] = v.view(B, K, v.size(-1))
+            else:
+                r[k] = v.view(B, K, *v.shape[1:])
+        labels = torch.tensor([b["label"] for b in batch], dtype=torch.float32)
+
+        return {"query": q, "history": r, "label": labels}
 
 
 

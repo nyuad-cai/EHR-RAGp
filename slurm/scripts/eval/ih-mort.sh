@@ -10,12 +10,16 @@
 #SBATCH  --gres=gpu:a100:1
 
 ##SBATCH -q nvidia-xxl
-##SBATCH -q shamout
+#SBATCH -q shamout
 ##SBATCH -q cair
 
 
-##SBATCH  --constraint=80g
+#SBATCH  --constraint=80g
 
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
 
 eval "$(conda shell.bash hook)"
 conda activate med-ehr
@@ -62,3 +66,6 @@ set -x
 
 # ehrmaba
 # python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/ih-mort/ehrmamba.yaml
+
+
+python test.py 

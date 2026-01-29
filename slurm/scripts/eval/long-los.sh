@@ -9,7 +9,7 @@
 #SBATCH  -e ./slurm/logs/%x.%J.err
 #SBATCH  --gres=gpu:a100:1
 
-#SBATCH -q nvidia-xxl
+##SBATCH -q nvidia-xxl
 ##SBATCH -q shamout
 ##SBATCH -q cair
 

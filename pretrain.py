@@ -50,6 +50,7 @@ def get_run_dir(wandb_logger):
 @rank_zero_only
 def make_dir(p):
     os.makedirs(p, exist_ok=True)
+    
 if pretrain_mode in ["mlm","causal"]:
     ConfigClass, ModelClass = get_config_and_model_cls(backbone_name,mode=pretrain_mode)
     seq_gen = SequencesGenerator(tokenizer_path= tokenizer_path,
@@ -96,10 +97,7 @@ if pretrain_mode in ["mlm","causal"]:
                           type_vocab_size=28,
                           visit_vocab_size=102,
                           stage_vocab_size=5,
-                          refernece_compile=False,
-
-           #TODO: update for bertvariants
-        )
+                          refernece_compile=False)
     elif pretrain_mode == "causal":
         cfg = ConfigClass(vocab_size=seq_gen.tokenizer.vocab_size,
                           pad_token_id=seq_gen.tokenizer.pad_id,
