@@ -7,9 +7,7 @@
 #SBATCH  -o ./slurm/logs/%x.%J.out
 #SBATCH  -e ./slurm/logs/%x.%J.err
 
-#--gres=gpu:1
-# -q nvidia-xxl
-# -q shamout
+
 
 # -p nvidia
 # -q shamout
