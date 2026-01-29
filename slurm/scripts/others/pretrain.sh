@@ -11,24 +11,20 @@
 #SBATCH  --gres=gpu:v100:2
 
 
-##SBATCH  --constraint=80g
-##SBATCH -q shamout
-##SBATCH -q cair
-##SBATCH -q nvidia-xxl
 
 
 
 
 
 
-export TOKENIZER_PATH="/scratch/sas10092/ehr-foundation/vocab.json"
-#export DATA_PATH="/scratch/sas10092/ehr-foundation/data/meds_normalized_arrow"
-export DATA_PATH="/scratch/sas10092/ehr-foundation/data/desc_gen_dataset/"
-#export DATA_IDX_PATH="/scratch/sas10092/ehr-foundation/pretrain_idx.parquet"
-export DATA_IDX_PATH="/scratch/sas10092/ehr-foundation/downstream_idx.parquet"
-export WANDB_API_KEY="59b6438e0496b3089f91abef35d31dae69b6c009"
-#export LOG_DIR="/scratch/sas10092/ehr-foundation/models/mlm"
-export LOG_DIR="/scratch/sas10092/ehr-foundation/models/simclr"
+
+export TOKENIZER_PATH=/path/to
+
+export DATA_PATH=/path/to
+export DATA_IDX_PATH=/path/to
+export WANDB_API_KEY=wandbkey
+
+export LOG_DIR=/path/to
 export VERSION="15_maskprob_12_5overlap"
 export PRETRAIN_MODE="simclr"
 export BASELINE="genhpf"
