@@ -10,17 +10,6 @@
 #SBATCH  -e ./slurm/logs/%x.%J.err
 
 
-#SBATCH  -q shamout
-#SBATCH  --constraint=80g
-##SBATCH  -q nvidia-xxl
-
-#--gres=gpu:1
-# -q nvidia-xxl
-# -q shamout
-# -p nvidia
-# -q shamout
-# --gres=gpu:a100:1
-# --constraint=80g
 
 
 
@@ -31,4 +20,4 @@ conda activate med-ehr
 set -x
 
 
-python vectordb.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/vectordb/config.yaml
+python vectordb.py --config-path /path/to
