@@ -9,3 +9,24 @@ Electronic Health Records (EHR) contain rich and diverse longitudinal patient in
 ![EHR-RAG](assets/main-figure.png)
 
 
+# ENvironment Setup
+To run this repo, you must install and run the libraries in the YAML file below.
+
+```
+
+```
+
+
+# Citation
+
+If you use our code, kindly cite our paper:
+```
+#TODO
+```
+
+
+
+
+
+
+
