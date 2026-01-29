@@ -1,4 +1,4 @@
-name: med-ehr
+name: ehr-rag
 channels:
   - conda-forge
   - defaults
