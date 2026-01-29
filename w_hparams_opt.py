@@ -48,13 +48,13 @@ def make_dir(p):
 def objective(trial: optuna.trial.Trial) -> float:
     
     try:
-        learning_rate =0.0000121 #trial.suggest_float("learning_rate", 1e-5, 5e-4, log=True)
-        weight_decay =0.003602 #trial.suggest_float("weight_decay", 1e-3, 1e-2)
-        pooling_enc ='cls'#trial.suggest_categorical("pooling_enc",['cls','mean'])
-        pooling_fuse ='query' #trial.suggest_categorical("pooling_fuse",['query','mean'])
-        fusion_gating = False #trial.suggest_categorical("fusion_gating", [True, False])
-        num_prototypes =1024 #trial.suggest_categorical("num_prototypes",[128,256,512,1024])
-        lambda_sim = 0#trial.suggest_float("lambda_sim", 0.0, 0.5, step=0.1)
+        learning_rate = trial.suggest_float("learning_rate", 1e-5, 5e-4, log=True)
+        weight_decay =trial.suggest_float("weight_decay", 1e-3, 1e-2)
+        pooling_enc =trial.suggest_categorical("pooling_enc",['cls','mean'])
+        pooling_fuse =trial.suggest_categorical("pooling_fuse",['query','mean'])
+        fusion_gating = trial.suggest_categorical("fusion_gating", [True, False])
+        num_prototypes =trial.suggest_categorical("num_prototypes",[128,256,512,1024])
+        lambda_sim = trial.suggest_float("lambda_sim", 0.0, 0.5, step=0.1)
 
         hparams={'learning_rate': learning_rate,
                 'weight_decay': weight_decay,
@@ -129,21 +129,6 @@ def objective(trial: optuna.trial.Trial) -> float:
                                              add_cls=True,
                                              split='val')
 
-        test_dataset = RetrievalEvalDataset(dataset_path=config['dataset']['data_path'],
-                                             data_idx_path=config['dataset']['data_idx_path'],
-                                             seq_gen=seq_gen,
-                                             embedder = embedder,
-                                             collate_fn= collate_fn_ret,
-                                             limits_dict=limits,
-                                             vectordb_path=args.chroma_db_path,
-                                             task=config['dataset']['task'],
-                                             main_window=config['dataset']['main_window_query'],
-                                             seq_length=config['seq_gen']['seq_length'],
-                                             top_k=top_k,
-                                             use_time=True,
-                                             use_numeric=True,
-                                             add_cls=True,
-                                             split='test')
         chunk_collator = EvalCollator() 
         retrieval_collator = RetrievalCollator(chunk_collator=chunk_collator, top_k=top_k)
 
@@ -167,17 +152,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                                     pin_memory=False,
                                     pin_memory_device='cuda',
                                     drop_last=True,
-                                    )
-        test_dataloader = DataLoader(dataset=test_dataset,
-                                    batch_size=config['dataloader']['batch_size'],
-                                    collate_fn=retrieval_collator,
-                                    num_workers=1,
-                                    prefetch_factor=1,
-                                    persistent_workers=False,
-                                    pin_memory=False,
-                                    pin_memory_device='cuda',
-                                    drop_last=True,
-                                    )   
+                                    ) 
 
         ConfigClass, ModelClass = get_config_and_model_cls(model_type=config['backbone_name'], mode='eval', variant=None)
 
@@ -268,7 +243,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                             )
         trainer.logger.log_hyperparams(hparams)
         trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
-        trainer.test(model=model, dataloaders=test_dataloader, ckpt_path='best')
+
 
     except optuna.exceptions.TrialPruned:
         wandb.finish()
