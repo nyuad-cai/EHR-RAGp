@@ -21,9 +21,7 @@ We conduct all experiments using [**MIMIC-IV**](https://physionet.org/content/mi
 
 
 # MEDS Format
-We convert the raw EHR records into a standardized **event-oriented format** using publicly available tools based on the  [MedicalEvent Data Standard (MEDS)](https://github.com/Medical-Event-Data-Standard).  
-This conversion transforms the original tables into a consistent timeline representation, which serves as input for model training and evaluation.
-We leverage the official MEDS export tool available for MIMIC-IV V3.1, [MIMIC_IV_MEDS](https://github.com/Medical-Event-Data-Standard/MIMIC_IV_MEDS/tree/main/src/MIMIC_IV_MEDS)
+We convert the raw EHR records into a standardized **event-oriented format** using publicly available tools based on the  [MedicalEvent Data Standard (MEDS)](https://github.com/Medical-Event-Data-Standard).  This conversion transforms the original tables into a consistent timeline representation, which serves as input for model training and evaluation. We leverage the official MEDS export tool available for MIMIC-IV V3.1, [MIMIC_IV_MEDS](https://github.com/Medical-Event-Data-Standard/MIMIC_IV_MEDS/tree/main/src/MIMIC_IV_MEDS)
 
 # Preprocessing
 Upon MEDS extraction, the dataset needs to be processed and cleaned
@@ -47,7 +45,7 @@ To run hyperparameter experiments
 python wo_hparams_opt.py
 ```
 
-## EHR-RAG training (hyperparameters tuning)
+## EHR-RAGp training (hyperparameters tuning)
 
 To run hyperparameter tuning experiments
 ```
