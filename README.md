@@ -8,7 +8,7 @@ Electronic Health Records (EHR) contain rich longitudinal patient information an
 ![EHR-RAG](assets/main-figure.png)
 
 
-# ENvironment Setup
+# Environment Setup
 To run this repo, you must install and run the libraries in the YAML file below.
 
 ```
