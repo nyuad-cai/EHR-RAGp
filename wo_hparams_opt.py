@@ -13,15 +13,16 @@ from torch.utils.data import DataLoader
 from src.models.models import EvalModel
 from lightning.pytorch.loggers import WandbLogger
 from src.models.baseline_models import HiBEHRTModule 
+from lightning.pytorch.utilities import rank_zero_only
 from src.models.baseline_models import DescEmbEvalModel
 from src.data.baseline_datasets import HiBEHRTEvalCollator
 from src.data.baseline_datasets import DescEmbDataset, DescEmbCollator
-from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor
 from src.models.baseline_models import GenHPFDownstreamModule, GenHPFEncoder
 from src.models.baseline_models import REMedWithGenHPF, REMedLightningModule
 from src.data.baseline_datasets import REMedGenHPFPoolDataset, REMedGenHPFCollator
 from src.data.datasets import limits, SequencesGenerator, EvalDataset, EvalCollator
 from src.data.baseline_datasets import HierarchicalGenHPFDataset, GenHPFEvalCollator
+from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
 from src.models.utils import get_config_and_model_cls, fix_roberta_longformer_max_pos, load_config_with_env
 
 
@@ -40,9 +41,22 @@ if config['backbone_name'] == 'descemb':
 elif config.get('variant') is not None:
     mode = config['variant']
 else:
-    mode = 'hparams-opt'
+    mode = 'hparams-opt-long'
 
+def get_run_dir(wandb_logger):
+    run = wandb_logger.experiment
+    d = getattr(run, "dir", None)
+    if callable(d):
+        d = d()
+    if not d:
+        base = wandb_logger.save_dir or "."
+        d = os.path.join(base, str(wandb_logger.version))
+    return d 
 
+@rank_zero_only
+def make_dir(p):
+    os.makedirs(p, exist_ok=True)
+    
 def objective(trial: optuna.trial.Trial) -> float:
     
     try:
@@ -310,7 +324,8 @@ def objective(trial: optuna.trial.Trial) -> float:
                                         task=config['task'],
                                         use_time=True,
                                         use_numeric=use_numeric,
-                                        split='train')
+                                        split='train',
+                                        use_long_context= True if config['seq_gen']['seq_length'] > 1024 else False)
             val_dataset = EvalDataset(dataset_path=config['dataset']['data_path'],
                                         data_idx_path=config['dataset']['data_idx_path'],
                                         seq_gen=seq_gen,
@@ -320,7 +335,19 @@ def objective(trial: optuna.trial.Trial) -> float:
                                         task=config['task'],
                                         use_time=True,
                                         use_numeric=use_numeric,
-                                        split='val')
+                                        split='val',
+                                        use_long_context= True if config['seq_gen']['seq_length'] >1024 else False)
+            test_dataset = EvalDataset(dataset_path=config['dataset']['data_path'],
+                                        data_idx_path=config['dataset']['data_idx_path'],
+                                        seq_gen=seq_gen,
+                                        seq_length=config['seq_gen']['seq_length'],
+                                        limits_dict=limits,
+                                        main_window=config['main_window'],
+                                        task=config['task'],
+                                        use_time=True,
+                                        use_numeric=use_numeric,
+                                        split='test',
+                                        use_long_context= True if config['seq_gen']['seq_length'] >1024 else False)
             cfg = ConfigClass(
                 vocab_size=seq_gen.tokenizer.vocab_size,
                 cls_token_id=seq_gen.tokenizer.cls_id,
@@ -420,8 +447,10 @@ def objective(trial: optuna.trial.Trial) -> float:
                                            pos_weight=1.0)
             
         elif config['backbone_name'] == 'remed':
-            learning_rate = trial.suggest_float("learning_rate", 1e-6, 1e-3)
-            hparams={'learning_rate': learning_rate,}
+            learning_rate = trial.suggest_float("learning_rate",  1e-4, 1e-2)
+            weight_decay = trial.suggest_float("weight_decay", 1e-3, 1e-2)
+            hparams={'learning_rate': learning_rate,
+                      'weight_decay': weight_decay}
             train_dataset = REMedGenHPFPoolDataset(hf_path=config['dataset']['data_path'],
                                                    data_idx_path=config['dataset']['data_idx_path'],
                                                    seq_field=config['main_window'],
@@ -469,10 +498,11 @@ def objective(trial: optuna.trial.Trial) -> float:
                                            freeze_encoder=True)
             model = REMedLightningModule(model=remed_genhpf,
                                          lr=learning_rate,
+                                         wd=weight_decay,
                                          max_epochs=75,
                                          pos_weight=1.0,
                                          freeze_encoder=True,
-                                         use_warmup=True,
+                                         use_warmup=False,
                                          warmup_steps=500,
                                          num_classes=1)
         train_dataloader = DataLoader(dataset=train_dataset,
@@ -490,7 +520,15 @@ def objective(trial: optuna.trial.Trial) -> float:
                                     collate_fn=collate_fn,
                                     pin_memory=True,
                                     persistent_workers=True,
-                                    prefetch_factor=4)     
+                                    prefetch_factor=4)
+        test_dataloader = DataLoader(dataset=test_dataset,
+                                    batch_size=config['dataloader']['batch_size'],
+                                    num_workers=8,
+                                    shuffle=False,
+                                    collate_fn=collate_fn,
+                                    pin_memory=True,
+                                    persistent_workers=True,
+                                    prefetch_factor=4)      
 
         wandb.login(key=config['logger']['wandb_api_key'])
 
@@ -499,9 +537,18 @@ def objective(trial: optuna.trial.Trial) -> float:
                                 save_dir=config['logger']['log_dir'],
                                 version=f"{config['backbone_name']}_{mode}_{config['job_id']}_{config['task']}_{config['version']}_{trial.number}",
                                 name=f"{config['backbone_name']}_{mode}_{config['job_id']}_{config['task']}_{config['version']}_{trial.number}",
-                                tags=[config['version'],config['task'],config['backbone_name'],'hparams_opt']) 
+                                tags=[config['version'],config['task'],config['backbone_name'],mode]) 
+
+        run_dir = get_run_dir(wandb_logger)         
+        ckpt_dir = os.path.join(run_dir, "ckpt")
+        make_dir(ckpt_dir)
 
 
+        checkpoint_callback = ModelCheckpoint(dirpath=ckpt_dir,
+                                                monitor='val_loss',
+                                                mode='min',
+                                                every_n_epochs=1,
+                                                save_top_k=1)
         early_stop = EarlyStopping(monitor='val_loss',
                                    min_delta=0.001,
                                    mode='min', 
@@ -525,12 +572,12 @@ def objective(trial: optuna.trial.Trial) -> float:
                             num_sanity_val_steps=0,
                             max_epochs=75,
                             precision=precision,
-                            callbacks=[early_stop,lr_monitor],
-                            enable_checkpointing=False
+                            callbacks=[early_stop,lr_monitor, checkpoint_callback],
+                            enable_checkpointing=True
                             )
         trainer.logger.log_hyperparams(hparams)
         trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
-
+        trainer.test(model=model, dataloaders=test_dataloader,ckpt_path='best')
     except optuna.exceptions.TrialPruned:
         wandb.finish()
         raise

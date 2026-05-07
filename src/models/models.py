@@ -13,6 +13,7 @@ from torchmetrics.classification import Accuracy, BinaryAUROC, BinaryAveragePrec
 
 
 
+
 class EHREmbeddings(nn.Module):
     def __init__(
         self,
@@ -648,8 +649,11 @@ class EHRRAPEncoders(nn.Module):
             time_out_features=16,
             use_numeric=use_numeric,
         )
+
+        
         if ckpt_path:
             self.get_pretrained_weights(ckpt_path=ckpt_path)
+
 
     def _pool(self, last_hidden: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         if self.pooling == "cls":
@@ -706,6 +710,8 @@ class EHRRAPEncoders(nn.Module):
         seq = seq_flat.reshape(B, K, L, H)
         vec = vec_flat.reshape(B, K, H)
         return {"seq": seq, "vec": vec}
+
+
 
     def forward(
         self,
@@ -780,137 +786,126 @@ class PrototypeRetrievalModule(nn.Module):
         self,
         hidden_size: int = 768,
         num_prototypes: int = 256,
-        temperature: float = 0.1,
-        align_mode: str = "soft",
-        sim_mode: str = "cosine",       
-        combine_mode: str = "mul",
-        lambda_sim: float = 0.5, 
-        attn_threshold: float = 0.5,
-        attn_temperature: float = 0.1,
-        renormalize_after_mask: bool = True,
-        return_debug: bool = False,
+        query_temperature: float = 0.1,
+        history_temperature: float = 0.025,
         normalize_prototypes: bool = True,
-        detach_hard_alignment: bool = True, 
+        softmax_threshold: float = 0.8,
+        softmax_temperature: float = 1.0,
     ):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_prototypes = num_prototypes
-        self.temperature = float(temperature)
-        self.align_mode = align_mode
-        self.sim_mode = sim_mode
-        self.combine_mode = combine_mode
-        self.lambda_sim = float(lambda_sim)
-
-        self.attn_threshold = float(attn_threshold)
-        self.attn_temperature = attn_temperature
-        self.renormalize_after_mask = bool(renormalize_after_mask)
-
-        self.return_debug = return_debug
+        self.query_temperature = float(query_temperature)
+        self.history_temperature = float(history_temperature)
         self.normalize_prototypes = normalize_prototypes
-        self.detach_hard_alignment = detach_hard_alignment
+    
+        self.softmax_threshold = float(softmax_threshold)
+        self.softmax_temperature = float(softmax_temperature)
 
         self.prototypes = nn.Parameter(torch.empty(num_prototypes, hidden_size))
         nn.init.normal_(self.prototypes, mean=0.0, std=0.02)
 
-    def _proto_probs(self, x: torch.Tensor) -> torch.Tensor:
+
+    def _proto_probs(self, x: torch.Tensor, temperature: float) -> torch.Tensor:
         P = self.prototypes
-        if self.normalize_prototypes:
-            P = F.normalize(P, p=2, dim=-1)
-
-        if self.sim_mode == "cosine":
-            x = F.normalize(x, p=2, dim=-1)
-
+        x = F.normalize(x, p=2, dim=-1)
+        P = F.normalize(P, p=2, dim=-1)
         logits = x @ P.t()
-        return F.softmax(logits / self.temperature, dim=-1)
+        return F.softmax(logits / temperature, dim=-1)
 
-    def _alignment_scores(self, q_probs: torch.Tensor, h_probs: torch.Tensor) -> torch.Tensor:
-        
-        if self.align_mode == "soft":
-            return (q_probs.unsqueeze(1) * h_probs).sum(dim=-1)
+    def _compute_neg_ce(self, q_probs: torch.Tensor, h_probs: torch.Tensor) -> torch.Tensor:
+        return (q_probs.unsqueeze(1) * h_probs.clamp_min(1e-8).log()).sum(dim=-1)
 
-        elif self.align_mode == "hard":
-            q_id = q_probs.argmax(dim=-1)           
-            h_id = h_probs.argmax(dim=-1)          
-            align = (h_id == q_id.unsqueeze(1)).float()
-            return align.detach() if self.detach_hard_alignment else align
 
-    def _similarity_scores(self, q: torch.Tensor, h: torch.Tensor) -> torch.Tensor:
-        
-        if self.sim_mode == "dot":
-            return (h * q.unsqueeze(1)).sum(dim=-1)
 
-        elif self.sim_mode == "cosine":
-            qn = F.normalize(q, p=2, dim=-1)
-            hn = F.normalize(h, p=2, dim=-1)
-            return (hn * qn.unsqueeze(1)).sum(dim=-1)
-
-    def _combine_scores(self, sim: torch.Tensor, align: torch.Tensor) -> torch.Tensor:
-        if self.combine_mode == "mul":
-            return sim * align
-
-        elif self.combine_mode == "add":
-            lam = self.lambda_sim
-            return lam * sim + (1.0 - lam) * align
-
-    def _weights_and_mask(self, scores: torch.Tensor) -> Dict[str, torch.Tensor]:
-        w = F.softmax(scores/self.attn_temperature, dim=-1)
-
-        if self.attn_threshold <= 0.0:
-            mask = torch.ones_like(w, dtype=torch.long) 
-            return {"attn_weights": w, "attn_mask": mask}
-
-        mask = (w >= self.attn_threshold).long()
-
-        if self.renormalize_after_mask:
-            w_masked = w * mask.to(w.dtype)
-            denom = w_masked.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-            w = w_masked / denom
+    def _weights_and_mask_softmax(
+        self,
+        scores: torch.Tensor,
+        valid_mask: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        if valid_mask is not None:
+            valid_bool = valid_mask.bool()
+            scores = scores.masked_fill(~valid_bool, -1e9)
         else:
-            w = w * mask.to(w.dtype)
+            valid_bool = torch.ones_like(scores, dtype=torch.bool)
 
-        return {"attn_weights": w, "attn_mask": mask}
+        weights = F.softmax(scores / self.softmax_temperature, dim=-1)
+
+        hard = (weights >= self.softmax_threshold).float()
+        keep = hard + weights - weights.detach()
+
+        keep = keep * valid_bool.float()
+
+        return {
+            "attn_weights": weights,                  
+            "attn_mask": keep,    
+        }
+
+    def _entropy(self, p: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+        p = p.clamp_min(eps)
+        return -(p * p.log()).sum(dim=-1)
 
     def forward(
         self,
         query_vec: torch.Tensor,
         hist_vec: torch.Tensor,
-        return_debug: Optional[bool] = None,
+        hist_valid_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
+        B, K, _ = hist_vec.shape
 
-        if return_debug is None:
-            return_debug = self.return_debug
+        if hist_valid_mask is not None:
+            hist_valid_mask = hist_valid_mask.to(device=hist_vec.device, dtype=torch.long)
+            valid_f = hist_valid_mask.to(dtype=hist_vec.dtype)
+            n_valid = valid_f.sum().clamp_min(1.0)
+        else:
+            valid_f = None
+            n_valid = None
 
-        q_probs = self._proto_probs(query_vec)
-        h_probs = self._proto_probs(hist_vec)
+        q_probs = self._proto_probs(query_vec,temperature= self.query_temperature )   # [B, P]
+        h_probs = self._proto_probs(hist_vec, temperature= self.history_temperature)    # [B, K, P]
 
-        align = self._alignment_scores(q_probs, h_probs)
-        sim = self._similarity_scores(query_vec, hist_vec)
-        
-        final = self._combine_scores(sim, align)
+        q_ent_all = self._entropy(q_probs)
+        h_ent_all = self._entropy(h_probs)
 
-        wm = self._weights_and_mask(final)
-        attn_weights = wm["attn_weights"]
-        attn_mask = wm["attn_mask"]        
+        q_max = q_probs.max(dim=-1).values.mean()
+        h_max_all = h_probs.max(dim=-1).values
 
-        out = {                      
-            "attn_weights": attn_weights,               
-            "attn_mask": attn_mask,                     
-            "final_scores": final,
-            'sim':sim,
-            "align":align,
-            "query_probs": q_probs,          
-            "hist_probs": h_probs,  
+        if valid_f is None:
+            q_ent = q_ent_all.mean()
+            h_ent = h_ent_all.mean()
+            h_max = h_max_all.mean()
+        else:
+            q_ent = q_ent_all.mean()
+            h_ent = (h_ent_all * valid_f).sum() / n_valid
+            h_max = (h_max_all * valid_f).sum() / n_valid
+
+        mean_q_probs = q_probs.mean(dim=0)
+        if valid_f is None:
+            mean_h_probs = h_probs.mean(dim=(0, 1))
+        else:
+            valid = valid_f.unsqueeze(-1)
+            mean_h_probs = (h_probs * valid).sum(dim=(0, 1)) / valid.sum().clamp_min(1.0)
+
+        mean_q_ent = self._entropy(mean_q_probs)
+        mean_h_ent = self._entropy(mean_h_probs)
+
+        neg_ce = self._compute_neg_ce(q_probs, h_probs)   # [B, K]
+
+        wm = self._weights_and_mask_softmax(neg_ce, valid_mask=hist_valid_mask)
+
+        out = {
+            "neg_ce": neg_ce,
+            "attn_mask": wm["attn_mask"],
+            "attn_weights": wm["attn_weights"],
+            "query_probs": q_probs,
+            "hist_probs": h_probs,
+            "diag_q_ent": q_ent,
+            "diag_q_max": q_max,
+            "diag_h_ent": h_ent,
+            "diag_h_max": h_max,
+            "diag_mean_q_ent": mean_q_ent,
+            "diag_mean_h_ent": mean_h_ent,
         }
-
-        if return_debug:
-            out.update({
-                "query_proto_probs": q_probs,          
-                "hist_proto_probs": h_probs,           
-                "align_scores": align,                  
-                "sim_scores": sim,                      
-                "softmax_scores": F.softmax(final, dim=-1), 
-            })
-
         return out
     
 
@@ -942,37 +937,65 @@ class FusionModule(nn.Module):
             batch_first=True, 
             norm_first=False,
         )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers,)
 
         self.out_norm = nn.LayerNorm(hidden_size)
+        # self.hist_score_proj = nn.Linear(hidden_size, hidden_size)
 
     def forward(
         self,
-        query_vec: torch.Tensor,                
-        hist_vec: torch.Tensor,                  
+        query_vec: torch.Tensor,
+        hist_vec: torch.Tensor,
         attn_mask: Optional[torch.Tensor] = None,
-        attn_weights: Optional[torch.Tensor] = None,  
+        attn_weights: Optional[torch.Tensor] = None,
+        hist_valid_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
 
         B, K, H = hist_vec.shape
         assert query_vec.shape == (B, H)
+
         if self.use_weights_as_gating and attn_weights is not None:
-            hist_vec = hist_vec * attn_weights.unsqueeze(-1).to(hist_vec.dtype) 
-        x = torch.cat([query_vec.unsqueeze(1), hist_vec], dim=1)  
-        if attn_mask is None:
-            keep = torch.ones(B, 1 + K, device=x.device, dtype=torch.long)
+            hist_vec = hist_vec * attn_weights.unsqueeze(-1).to(hist_vec.dtype)
+            # hist_vec = self.hist_score_proj(hist_vec)
+
+        # if self.use_weights_as_gating and attn_weights is not None:
+        #     alpha = attn_weights.unsqueeze(-1).to(hist_vec.dtype)
+        #     hist_vec = hist_vec * (1.0 + alpha)
+
+
+        # if self.use_weights_as_gating and attn_weights is not None:
+        #     mask = hist_valid_mask.float()                         # [B, K]
+        #     num_valid = mask.sum(dim=1, keepdim=True).clamp_min(1.0)  # [B, 1]
+
+        #     scaled_weights = attn_weights * num_valid              # rescale
+        #     scaled_weights = scaled_weights * mask                 # zero out padding
+
+        #     hist_vec = hist_vec * scaled_weights.unsqueeze(-1).to(hist_vec.dtype)
+
+        elif attn_mask is not None:
+            hist_vec = hist_vec * attn_mask.unsqueeze(-1).to(hist_vec.dtype)
+
+        x = torch.cat([query_vec.unsqueeze(1), hist_vec], dim=1)  # [B, 1+K, H]
+
+        if hist_valid_mask is None:
+            src_key_padding_mask = None
+            keep = torch.ones(B, 1 + K, device=x.device, dtype=x.dtype)
         else:
-            keep = torch.cat([torch.ones(B, 1, device=x.device, dtype=attn_mask.dtype), attn_mask],dim=1)  
-        src_key_padding_mask = (keep == 0)
+            query_valid = torch.ones(B, 1, device=x.device, dtype=torch.bool)
+            keep_bool = torch.cat([query_valid, hist_valid_mask.bool()], dim=1)   # [B, 1+K]
+            src_key_padding_mask = ~keep_bool
+            keep = keep_bool.to(x.dtype)
+
         x_fused = self.encoder(x, src_key_padding_mask=src_key_padding_mask)
         x_fused = self.out_norm(x_fused)
 
         if self.output_mode == "query":
-            fused_vec = x_fused[:, 0, :] 
+            fused_vec = x_fused[:, 0, :]
         elif self.output_mode == "mean":
-            w = keep.to(x_fused.dtype).unsqueeze(-1)  
+            w = keep.unsqueeze(-1)
             denom = w.sum(dim=1).clamp_min(1.0)
             fused_vec = (x_fused * w).sum(dim=1) / denom
+
         out = {"fused_vec": fused_vec}
         if self.return_seq:
             out["fused_seq"] = x_fused
@@ -985,7 +1008,7 @@ class EHRRAPEvalModel(lt.LightningModule):
     def __init__(
         self,
         config,
-        backbone,                      
+        backbone,
         ckpt_path: Optional[str] = None,
         lr: float = 2e-5,
         wd: float = 0.001,
@@ -995,37 +1018,29 @@ class EHRRAPEvalModel(lt.LightningModule):
         pooling: str = "cls",
         use_numeric: bool = False,
         use_time: bool = False,
-        optimizer: str = "sgd",
         # --- prototype module ---
         num_prototypes: int = 256,
-        proto_temperature: float = 0.1,
-        align_mode: str = "soft",          # "soft" | "hard"
-        sim_mode: str = "cosine",          # "cosine" | "dot"
-        combine_mode: str = "mul",         # "mul" | "add"
-        lambda_sim: float = 0.5,
-        attn_threshold: float = 0.0,
-        attn_temperature: float = 1.0,
-        renormalize_after_mask: bool = False,
+        query_temperature: float = 0.1,
+        history_temperature: float = 0.025,
         normalize_prototypes: bool = True,
-        detach_hard_alignment: bool = True,
+        softmax_threshold: float = 0.8,
+        softmax_temperature: float = 1.0,
+        sample_ent_lambda: float = 0.001,
+        usage_ent_lambda: float = 0.001,
+        use_prototypes: bool = False,
         # --- fusion module ---
         fusion_layers: int = 2,
         fusion_heads: int = 4,
         fusion_ff_mult: int = 4,
-        fusion_use_weights_as_gating: bool = True,
-        fusion_output_mode: str = "query",  # "query" | "mean"
-        # --- misc ---
-        return_debug: bool = False):
+        fusion_output_mode: str = "query",
+        use_weights_as_gating: bool = False,
+    ):
         super().__init__()
         self.save_hyperparameters(ignore=["backbone"])
         self.config = config
-        self.optimizer_name = optimizer
-
-        rope_model_types = {"modernbert", "roformer", "mamba"}
-        model_type = getattr(config, "model_type", "").lower()
-        is_rope = model_type in rope_model_types
-
-
+        self.sample_ent_lambda = float(sample_ent_lambda)
+        self.usage_ent_lambda = float(usage_ent_lambda)
+        self.use_prototypes = use_prototypes
         self.encoders = EHRRAPEncoders(
             config=config,
             backbone=backbone,
@@ -1034,44 +1049,32 @@ class EHRRAPEvalModel(lt.LightningModule):
             use_time=use_time,
             use_numeric=use_numeric,
             ckpt_path=ckpt_path,
-            return_token_level=False)
+            return_token_level=False,
+        )
 
-        self.prototypes = PrototypeRetrievalModule(hidden_size=config.hidden_size,
-                                                   num_prototypes=num_prototypes,
-                                                   temperature=proto_temperature,
-                                                   align_mode=align_mode,
-                                                   sim_mode=sim_mode,
-                                                   combine_mode=combine_mode,
-                                                   lambda_sim=lambda_sim,
-                                                   attn_threshold=attn_threshold,
-                                                   attn_temperature=attn_temperature,
-                                                   renormalize_after_mask=renormalize_after_mask,
-                                                   return_debug=return_debug,
-                                                   normalize_prototypes=normalize_prototypes,
-                                                   detach_hard_alignment=detach_hard_alignment)
+        self.prototypes = PrototypeRetrievalModule(
+            hidden_size=config.hidden_size,
+            num_prototypes=num_prototypes,
+            query_temperature=query_temperature,
+            history_temperature=history_temperature,
+            normalize_prototypes=normalize_prototypes,
+            softmax_threshold=softmax_threshold,
+            softmax_temperature=softmax_temperature,
+        )
 
-        self.fusion = FusionModule(hidden_size=config.hidden_size,
-                                   num_layers=fusion_layers,
-                                   num_heads=fusion_heads,
-                                   ff_mult=fusion_ff_mult,
-                                   dropout=dropout,
-                                   use_weights_as_gating=fusion_use_weights_as_gating,
-                                   output_mode=fusion_output_mode,
-                                   return_seq=False)
+        self.fusion = FusionModule(
+            hidden_size=config.hidden_size,
+            num_layers=fusion_layers,
+            num_heads=fusion_heads,
+            ff_mult=fusion_ff_mult,
+            dropout=dropout,
+            use_weights_as_gating=use_weights_as_gating,
+            output_mode=fusion_output_mode,
+            return_seq=False,
+        )
 
         self.classifier = nn.Linear(config.hidden_size, 1)
         self.criterion = nn.BCEWithLogitsLoss()
-
-
-#         if freeze:
-#             for p in self.encoders.parameters():
-#                 p.requires_grad = False
-#             for p in self.prototypes.parameters():
-#                 p.requires_grad = True
-#             for p in self.fusion.parameters():
-#                 p.requires_grad = True
-#             for p in self.classifier.parameters():
-#                 p.requires_grad = True
 
         self.lr = lr
         self.wd = wd
@@ -1088,54 +1091,158 @@ class EHRRAPEvalModel(lt.LightningModule):
         self._val_preds, self._val_labels = [], []
         self._test_preds, self._test_labels = [], []
         
+#         if freeze:
+#             for p in self.encoders.parameters():
+#                 p.requires_grad = False
+#             for p in self.prototypes.parameters():
+#                 p.requires_grad = True
+#             for p in self.fusion.parameters():
+#                 p.requires_grad = True
+#             for p in self.classifier.parameters():
+#                 p.requires_grad = True
 
-        self.return_debug = return_debug
+# with ordering
+    # def forward(self, batch: Dict[str, Any]) -> Dict[str, torch.Tensor]:
+    #     enc_out = self.encoders(batch, query_key="query", history_key="history")
 
+    #     proto_out = None
+    #     attn_mask = None
+    #     attn_weights = None
+    #     hist_valid_mask = batch["history_valid_mask"]
+    #     hist_vec = enc_out["hist_vec"]
+
+    #     if self.use_prototypes:
+    #         proto_out = self.prototypes(
+    #             query_vec=enc_out["query_vec"],
+    #             hist_vec=hist_vec,
+    #             hist_valid_mask=hist_valid_mask,
+    #         )
+
+    #         attn_mask = proto_out["attn_mask"]
+    #         attn_weights = proto_out["attn_weights"]
+
+    #         # sort by prototype score, highest first
+    #         sort_scores = proto_out["attn_weights"]  # or proto_out["neg_ce"]
+    #         sort_idx = torch.argsort(sort_scores, dim=1, descending=True)
+
+    #         hist_vec = torch.gather(
+    #             hist_vec,
+    #             dim=1,
+    #             index=sort_idx.unsqueeze(-1).expand(-1, -1, hist_vec.size(-1)),
+    #         )
+
+    #         hist_valid_mask = torch.gather(hist_valid_mask, dim=1, index=sort_idx)
+
+    #         if attn_mask is not None:
+    #             attn_mask = torch.gather(attn_mask, dim=1, index=sort_idx)
+
+    #         if attn_weights is not None:
+    #             attn_weights = torch.gather(attn_weights, dim=1, index=sort_idx)
+
+    #     fuse_out = self.fusion(
+    #         query_vec=enc_out["query_vec"],
+    #         hist_vec=hist_vec,
+    #         attn_mask=attn_mask,
+    #         attn_weights=attn_weights,
+    #         hist_valid_mask=hist_valid_mask,
+    #     )
+
+    #     fused_vec = fuse_out["fused_vec"]
+    #     logits = self.classifier(fused_vec).squeeze(-1)
+
+    #     out = {
+    #         "logits": logits,
+    #         "fused_vec": fused_vec,
+    #     }
+    #     if proto_out is not None:
+    #         out["proto"] = proto_out
+
+    #     return out
+
+# without ordering
     def forward(self, batch: Dict[str, Any]) -> Dict[str, torch.Tensor]:
-
         enc_out = self.encoders(batch, query_key="query", history_key="history")
 
-        
-        proto_out = self.prototypes(
-            query_vec=enc_out["query_vec"],
-            hist_vec=enc_out["hist_vec"])
-#         print('sim', proto_out['sim'],'\n')
-#         print('align', proto_out['align'],'\n')
-# #         print('query_probs', proto_out['query_probs'])
-# #         print('hist_probs', proto_out['hist_probs'])
-        
-#         print('final_scores=',proto_out['final_scores'],'\n')
-#         print('attn_weights=',proto_out['attn_weights'],'\n')
-#         print('attn_mask=',proto_out['attn_mask'],'\n\n\n\n')
-        
+        proto_out = None
+        attn_mask = None
+        attn_weights = None
+        hist_valid_mask = batch["history_valid_mask"]
+
+        if self.use_prototypes:
+            proto_out = self.prototypes(
+                query_vec=enc_out["query_vec"],
+                hist_vec=enc_out["hist_vec"],
+                hist_valid_mask=hist_valid_mask,
+            )
+            attn_mask = proto_out["attn_mask"]          # soft/ST mask
+            attn_weights = proto_out["attn_weights"]    # soft weights
 
         fuse_out = self.fusion(
             query_vec=enc_out["query_vec"],
             hist_vec=enc_out["hist_vec"],
-            attn_mask=proto_out.get("attn_mask", None),
-            attn_weights=proto_out.get("attn_weights", None),)
+            attn_mask=attn_mask,
+            attn_weights=attn_weights,
+            hist_valid_mask=hist_valid_mask,            # real padding mask only
+        )
 
         fused_vec = fuse_out["fused_vec"]
-#         print('fused_vec=', fused_vec,)
-        logits = self.classifier(fused_vec).squeeze(-1) 
+        logits = self.classifier(fused_vec).squeeze(-1)
 
-        out = {"logits": logits, "fused_vec": fused_vec, "proto": proto_out}
+        out = {
+            "logits": logits,
+            "fused_vec": fused_vec,
+        }
+        if proto_out is not None:
+            out["proto"] = proto_out
 
-        if self.return_debug:
-            out["debug"] = {"attn_keep_rate": proto_out["attn_mask"].float().mean(dim=1),
-                            "attn_max_weight": proto_out["attn_weights"].max(dim=1).values,}
         return out
 
     def shared_step(self, batch: Dict[str, Any], stage: str) -> torch.Tensor:
         out = self.forward(batch)
-        logits = out["logits"]
 
+        proto = out.get("proto", None)
+
+        # --- log proto diagnostics if present ---
+        if proto is not None and "diag_q_ent" in proto:
+            self.log(f"{stage}_sample_q_ent", proto["diag_q_ent"], prog_bar=True, on_step=True if stage == 'train' else False, on_epoch=True, logger=True, sync_dist=True)
+            self.log(f"{stage}_q_max", proto["diag_q_max"], prog_bar=True, on_step=True if stage == 'train' else False, on_epoch=True, logger=True, sync_dist=True)
+            self.log(f"{stage}_sample_h_ent", proto["diag_h_ent"], prog_bar=True, on_step=True if stage == 'train' else False, on_epoch=True, logger=True, sync_dist=True)
+            self.log(f"{stage}_h_max", proto["diag_h_max"], prog_bar=True, on_step=True if stage == 'train' else False, on_epoch=True, logger=True, sync_dist=True)
+
+        if proto is not None and "diag_mean_q_ent" in proto:
+            self.log(f"{stage}_batch_q_ent", proto["diag_mean_q_ent"], prog_bar=False, on_step=True if stage == "train" else False, on_epoch=True, logger=True, sync_dist=True)
+            self.log(f"{stage}_batch_h_ent", proto["diag_mean_h_ent"], prog_bar=False, on_step=True if stage == "train" else False, on_epoch=True, logger=True, sync_dist=True)
+
+        logits = out["logits"]
         y = batch["label"].float().view(-1)
-        loss = self.criterion(logits, y)
+
+        task_loss = self.criterion(logits, y)
+
+
+        sample_ent_reg = task_loss.new_zeros(())
+        usage_ent_reg = task_loss.new_zeros(())
+
+        if proto is not None and "diag_q_ent" in proto and self.sample_ent_lambda > 0.0:
+            sample_ent_reg = proto["diag_q_ent"] + proto["diag_h_ent"]
+            # sample_ent_reg = proto["diag_h_ent"]
+        if proto is not None and "diag_mean_q_ent" in proto and self.usage_ent_lambda > 0.0:
+            usage_ent_reg = -(proto["diag_mean_q_ent"] + proto["diag_mean_h_ent"])
+            # usage_ent_reg = -(proto["diag_mean_h_ent"])
+
+
+        # total_loss = task_loss + self.ent_lambda * ent_reg
+        total_loss = (
+            task_loss
+            + self.sample_ent_lambda * sample_ent_reg
+            + self.usage_ent_lambda * usage_ent_reg
+        )
+
+        # --- logging losses ---
+        self.log(f"{stage}_loss", task_loss, prog_bar=False, on_step=True, on_epoch=True, logger=True, sync_dist=True)
+        self.log(f"{stage}_total_loss", total_loss, prog_bar=False, on_step=True, on_epoch=True, logger=True, sync_dist=True)
+
 
         pos_score = torch.sigmoid(logits)
-
-        self.log(f"{stage}_loss", loss, prog_bar=True, on_step=True, on_epoch=True, logger=True, sync_dist=True)
 
         if stage == "train":
             self._train_labels.append(y.detach())
@@ -1147,15 +1254,36 @@ class EHRRAPEvalModel(lt.LightningModule):
             self._test_labels.append(y.detach())
             self._test_preds.append(pos_score.detach())
 
-        if "proto" in out and "attn_mask" in out["proto"]:
-            keep_rate = out["proto"]["attn_mask"].float().mean()
-            self.log(f"{stage}_keep_rate", keep_rate, prog_bar=True, on_epoch=True, logger=True, sync_dist=True)
+        if proto is not None and "attn_weights" in proto and proto["attn_weights"] is not None and not self.fusion.use_weights_as_gating:
+            with torch.no_grad():
+                weights = proto["attn_weights"].float()
+                mask = batch["history_valid_mask"].float()
 
-        if "proto" in out and "attn_weights" in out["proto"]:
-            max_w = out["proto"]["attn_weights"].max(dim=1).values.mean()
-            self.log(f"{stage}_attn_maxw", max_w, prog_bar=True, on_epoch=True, logger=True, sync_dist=True)
+                hard_keep = (weights >= self.prototypes.softmax_threshold).float()
+                keep_rate = (hard_keep * mask).sum() / mask.sum().clamp_min(1.0)
 
-        return loss
+            self.log(f"{stage}_keep_rate",keep_rate,prog_bar=False, on_step=True, on_epoch=True,logger=True,sync_dist=True)
+
+        if proto is not None and "attn_weights" in proto and proto["attn_weights"] is not None and self.fusion.use_weights_as_gating:
+            with torch.no_grad():
+                weights = proto["attn_weights"].float()
+                mask = batch["history_valid_mask"].float()
+
+                weights = weights * mask
+                denom = weights.sum(dim=1, keepdim=True).clamp_min(1e-8)
+                weights_norm = weights / denom
+
+                weight_entropy = -(weights_norm * (weights_norm.clamp_min(1e-8).log())).sum(dim=1)
+
+                valid_counts = mask.sum(dim=1).clamp_min(1.0)
+                max_entropy = valid_counts.log().clamp_min(1e-8)
+                weight_entropy_norm = (weight_entropy / max_entropy).mean()
+
+            self.log(f"{stage}_weight_entropy",weight_entropy.mean(), prog_bar=False, on_step=True, on_epoch=True,logger=True,sync_dist=True)
+            self.log(f"{stage}_weight_entropy_norm", weight_entropy_norm, prog_bar=False, on_step=True, on_epoch=True, logger=True,sync_dist=True)
+
+
+        return total_loss
 
     def training_step(self, batch: Dict[str, Any], batch_idx: int) -> torch.Tensor:
         return self.shared_step(batch, stage="train")
@@ -1165,6 +1293,57 @@ class EHRRAPEvalModel(lt.LightningModule):
 
     def test_step(self, batch: Dict[str, Any], batch_idx: int) -> torch.Tensor:
         return self.shared_step(batch, stage="test")
+
+
+    # def on_train_start(self) -> None:
+    #     if not self.use_prototypes:
+    #         return
+    #     self._proto_init = self.prototypes.prototypes.detach().clone()
+
+    # def on_after_backward(self) -> None:
+    #     if not self.use_prototypes or not hasattr(self, "_proto_init"):
+    #         return
+
+    #     current = self.prototypes.prototypes.detach()
+    #     delta_norm = (current - self._proto_init).norm()
+    #     current_norm = current.norm().clamp_min(1e-12)
+    #     rel_delta = delta_norm / current_norm
+
+        
+    #     proto_param = self.prototypes.prototypes
+
+    #     if proto_param.grad is None:
+    #         grad_norm = 0.0
+    #     else:
+    #         grad_norm = proto_param.grad.norm()
+            
+    #     self.log(
+    #         "train_proto_delta_norm",
+    #         delta_norm,
+    #         on_step=True,
+    #         on_epoch=True,
+    #         prog_bar=True,
+    #         logger=True,
+    #         sync_dist=True,
+    #     )
+    #     self.log(
+    #         "train_proto_rel_delta",
+    #         rel_delta,
+    #         on_step=True,
+    #         on_epoch=True,
+    #         prog_bar=True,
+    #         logger=True,
+    #         sync_dist=True,
+    #     )    
+
+    #     self.log(
+    #         "train_proto_grad_norm",
+    #         grad_norm,
+    #         on_step=True,
+    #         on_epoch=True,
+    #         prog_bar=True,
+    #         logger=True,
+    #         sync_dist=True)
 
 
     def on_train_epoch_end(self) -> None:
@@ -1209,38 +1388,28 @@ class EHRRAPEvalModel(lt.LightningModule):
         self._test_preds.clear()
 
     def configure_optimizers(self):
-        if self.optimizer_name == "adamw":
-            decay, no_decay = [], []
-            for name, p in self.named_parameters():
-                if not p.requires_grad:
-                    continue
-                if "bias" in name or "LayerNorm" in name:
-                    no_decay.append(p)
-                else:
-                    decay.append(p)
+        param_groups = [
+            {"params": self.encoders.parameters()},
+            {"params": self.fusion.parameters()},
+            {"params": self.classifier.parameters()},
+        ]
 
-            optimizer = torch.optim.AdamW(
-                [{"params": decay, "weight_decay": self.wd},
-                 {"params": no_decay, "weight_decay": 0.0}],
-                lr=self.lr,
-                betas=(0.9, 0.999),
-                eps=1e-8,)
+        if self.use_prototypes:
+            param_groups.insert(1, {"params": self.prototypes.parameters()})
 
-        elif self.optimizer_name == "adam":
-            optimizer = torch.optim.Adam(
-                [p for p in self.parameters() if p.requires_grad],
-                lr=self.lr,)
-
-        elif self.optimizer_name == "sgd":
-            optimizer = torch.optim.SGD(
-                [p for p in self.parameters() if p.requires_grad],
-                lr=self.lr,
-                momentum=0.9,
-                nesterov=True,
-                weight_decay=self.wd,)
+        optimizer = torch.optim.SGD(
+            param_groups,
+            lr=self.lr,
+            momentum=0.9,
+            nesterov=True,
+            weight_decay=self.wd,
+        )
 
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer=optimizer,
             T_max=self.max_epochs,
-            eta_min=0.0,)
+            eta_min=0.0,
+        )
         return {"optimizer": optimizer, "lr_scheduler": scheduler}
+
+

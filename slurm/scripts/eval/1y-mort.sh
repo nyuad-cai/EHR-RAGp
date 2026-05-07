@@ -25,7 +25,7 @@ set -x
 # python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/1y-mort/roberta.yaml
 # python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/1y-mort/longformer.yaml 
 # python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/1y-mort/big_bird.yaml 
-# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/1y-mort/roformer.yaml 
+python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/1y-mort/roformer.yaml 
 # python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/1y-mort/modernbert.yaml 
 
 # # descemb cls-ft
@@ -39,8 +39,6 @@ set -x
 
 # remed
 # python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/1y-mort/remed.yaml
-
-
 
 
 # hibehrt

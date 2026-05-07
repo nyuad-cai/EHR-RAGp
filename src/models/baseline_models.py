@@ -12,10 +12,10 @@ from typing import Optional, Tuple
 from transformers import AutoModel, AutoConfig
 from .utils import log_bootstrap_ci_text_percentile
 from transformers.modeling_outputs import BaseModelOutput
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torchmetrics.classification import BinaryAUROC, BinaryAveragePrecision
 from transformers.models.roformer.modeling_roformer import RoFormerConfig, RoFormerEncoder
-
 
 
 #########################################################
@@ -1059,6 +1059,7 @@ class REMedLightningModule(lt.LightningModule):
         self,
         model, 
         lr: float = 1e-5,
+        wd: float = 1e-3,
         max_epochs: int = 100,
         pos_weight: float = 1.0,
         freeze_encoder: bool = True,
@@ -1109,7 +1110,7 @@ class REMedLightningModule(lt.LightningModule):
 
     def _step_once(self, batch, y, mode: str):
         opt = self.optimizers()
-        sch = self.lr_schedulers()
+        # sch = self.lr_schedulers()
 
         self.model.remed.set_mode(mode)
 
@@ -1126,8 +1127,8 @@ class REMedLightningModule(lt.LightningModule):
         opt.zero_grad(set_to_none=True)
         self.manual_backward(loss)
         opt.step()
-        if sch is not None:
-            sch.step()
+        # if sch is not None:
+        #     sch.step()
 
         return loss, logits
 
@@ -1159,6 +1160,11 @@ class REMedLightningModule(lt.LightningModule):
         self.log("train_auprc", self.train_auprc(p, y), prog_bar=True)
         self.train_step_label.clear()
         self.train_step_preds.clear()
+
+        sch = self.lr_schedulers()
+        if sch is not None:
+            sch.step()
+        
 
     def validation_step(self, batch, batch_idx):
         self.model.remed.set_mode("predictor")
@@ -1228,15 +1234,35 @@ class REMedLightningModule(lt.LightningModule):
         self.test_step_preds.clear()
 
     def configure_optimizers(self):
-        opt = torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
 
-        if self.hparams.use_warmup:
-            sch = torch.optim.lr_scheduler.LinearLR(
-                opt, start_factor=1 / 100, end_factor=1.0, total_iters=self.hparams.warmup_steps
-            )
-        else:
-            sch = torch.optim.lr_scheduler.LinearLR(opt, start_factor=1.0, end_factor=1.0, total_iters=1)
-        return {"optimizer": opt, "lr_scheduler": sch}
+        opt = torch.optim.SGD(self.parameters(), lr=self.hparams.lr, weight_decay=self.hparams.wd)
+
+        sch = torch.optim.lr_scheduler.CosineAnnealingLR(
+            opt,
+            T_max=self.hparams.max_epochs,  # 75 epochs
+            eta_min=0.0
+        )
+
+        return {
+            "optimizer": opt,
+            "lr_scheduler": {
+                "scheduler": sch,
+                "interval": "epoch",   # <-- key
+                "frequency": 1
+            }
+        }
+        # opt = torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
+
+        # if self.hparams.use_warmup:
+        #     sch = torch.optim.lr_scheduler.LinearLR(
+        #         opt, start_factor=1 / 100, end_factor=1.0, total_iters=self.hparams.warmup_steps
+        #     )
+        # else:
+        #     sch = torch.optim.lr_scheduler.CosineAnnealingLR(
+        #     optimizer=opt,
+        #     T_max=75,
+        #     eta_min=0)
+        # return {"optimizer": opt, "lr_scheduler": sch}
     
 
 
@@ -1672,3 +1698,58 @@ class HiBEHRTModule(lt.LightningModule):
         print("missing keys:", missing)
         print("+" * 50)
         print("unexpected keys:", unexpected)
+
+
+#########################################################
+# LLM baselines
+#########################################################
+
+
+def load_hf_model(model_name: str, hf_token: str = None):
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        token=hf_token,
+        trust_remote_code=True,
+    )
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    tokenizer.padding_side = "left"
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        token=hf_token,
+        trust_remote_code=True,
+        torch_dtype=torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16,
+        device_map="auto",
+    )
+    model.eval()
+   
+
+    yes_token_id = None
+    no_token_id = None
+
+    for candidate in ["Yes", " Yes", "yes", " yes"]:
+        ids = tokenizer.encode(candidate, add_special_tokens=False)
+        if len(ids) == 1:
+            yes_token_id = ids[0]
+            break
+
+    for candidate in ["No", " No", "no", " no"]:
+        ids = tokenizer.encode(candidate, add_special_tokens=False)
+        if len(ids) == 1:
+            no_token_id = ids[0]
+            break
+
+    if yes_token_id is None:
+        raise ValueError("Could not find a single-token encoding for 'Yes'")
+    if no_token_id is None:
+        raise ValueError("Could not find a single-token encoding for 'No'")
+
+    return {
+        "model": model,
+        "tokenizer": tokenizer,
+        "yes_token_id": yes_token_id,
+        "no_token_id": no_token_id,
+    }

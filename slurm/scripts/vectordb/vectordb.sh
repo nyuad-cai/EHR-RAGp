@@ -1,34 +1,35 @@
 #!/bin/bash
-#SBATCH  -J vectordb
-#SBATCH  -t 4-00:00:00
+#SBATCH  -J zest
+#SBATCH  -t 10-00:00:00
 #SBATCH  -n 1
 #SBATCH  -N 1
 #SBATCH  -p nvidia
-#SBATCH  --gres=gpu:a100:1
-#SBATCH  -c 32
+#SBATCH  -c 16
 #SBATCH  -o ./slurm/logs/%x.%J.out
 #SBATCH  -e ./slurm/logs/%x.%J.err
+#SBATCH  --gres=gpu:a100:1
 
+##SBATCH  --constraint=80g
 
-#SBATCH  -q shamout
-#SBATCH  --constraint=80g
-##SBATCH  -q nvidia-xxl
+##SBATCH -q cair
 
-#--gres=gpu:1
-# -q nvidia-xxl
-# -q shamout
-# -p nvidia
-# -q shamout
-# --gres=gpu:a100:1
-# --constraint=80g
+##SBATCH -q shamout
+
+#SBATCH  -q nvidia-xxl
 
 
 
 
-eval "$(conda shell.bash hook)"
-conda activate med-ehr
-
-set -x
+OVERLAY=/scratch/sas10092/ehr-foundation/overlay-512000M-15000K.ext3
+SIF=/share/apps/admin/singularity-images/centos-8.2.2004.sif
 
 
-python vectordb.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/vectordb/config.yaml
+
+singularity exec --nv --overlay "${OVERLAY}" "${SIF}" bash -lc "
+  source /share/apps/NYUAD5/miniconda/3-4.11.0/etc/profile.d/conda.sh
+  conda activate med-ehr
+  set -x
+  cd /scratch/sas10092/ehr-foundation
+  python create_vdb_idx.py
+"
+

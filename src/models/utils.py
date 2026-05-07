@@ -4,6 +4,8 @@ import os
 import yaml
 import torch
 import wandb
+import polars as pl
+from tqdm import tqdm
 import torch.nn as nn
 import torch.distributed as dist
 
@@ -243,3 +245,151 @@ def log_bootstrap_ci_text_percentile(
             f"{prefix}_auroc_ci": auroc_ci_text,
             f"{prefix}_auprc_ci": auprc_ci_text,
         }, commit=False)
+
+
+
+#########################################################
+# LLM baselines
+#########################################################
+
+TASK_PROMPTS = {
+    "y_los_7": (
+        "You are an expert clinical risk prediction model using electronic health records.\n\n"
+        "--- PATIENT DATA ---\n"
+        "Electronic Health Records:\n"
+        "{ehr_text}\n\n"
+        "--- TASK ---\n"
+        "will this patient have a hospital length of stay longer than 7 days?\n\n"
+        "Answer only using one word: Yes or No.\n\n"
+        "Answer:"
+    ),
+    "y_icu_readmit_30": (
+        "You are an expert clinical risk prediction model using electronic health records.\n\n"
+        "--- PATIENT DATA ---\n"
+        "Electronic Health Records:\n"
+        "{ehr_text}\n\n"
+        "--- TASK ---\n"
+        "Will this patient be readmitted to the ICU within 30 days after ICU discharge?\n\n"
+        "Answer only using one word: Yes or No.\n\n"
+        "Answer:"
+    ),
+    "y_mort": (
+        "You are an expert clinical risk prediction model using electronic health records.\n\n"
+        "--- PATIENT DATA ---\n"
+        "Electronic Health Records:\n"
+        "{ehr_text}\n\n"
+        "--- TASK ---\n"
+        "Will this patient die during this hospital admission?\n\n"
+        "Answer only using one word: Yes or No.\n\n"
+        "Answer:"
+    ),
+    "y_mort_1yr": (
+        "You are an expert clinical risk prediction model using electronic health records.\n\n"
+        "--- PATIENT DATA ---\n"
+        "Electronic Health Records:\n"
+        "{ehr_text}\n\n"
+        "--- TASK ---\n"
+        "Will this patient die within 1 year after hospital discharge?\n\n"
+        "Answer only using one word: Yes or No.\n\n"
+        "Answer:"
+    ),
+}
+
+
+def build_prediction_prompt(ehr_text: str, task_name: str) -> str:
+    if task_name not in TASK_PROMPTS:
+        raise ValueError(f"Unknown task_name: {task_name}")
+    return TASK_PROMPTS[task_name].format(ehr_text=ehr_text)
+
+
+def predict_yes_no_probability(ehr_text: str, task_name: str, model_bundle: dict):
+    model = model_bundle["model"]
+    tokenizer = model_bundle["tokenizer"]
+    yes_token_id = model_bundle["yes_token_id"]
+    no_token_id = model_bundle["no_token_id"]
+
+    prompt = build_prediction_prompt(ehr_text, task_name)
+
+    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    next_token_logits = outputs.logits[:, -1, :].float()
+
+    yes_logit = next_token_logits[0, yes_token_id]
+    no_logit = next_token_logits[0, no_token_id]
+
+    yes_no_logits = torch.stack([no_logit, yes_logit], dim=0)
+    probs = torch.softmax(yes_no_logits, dim=0)
+
+    no_prob = float(probs[0].cpu())
+    yes_prob = float(probs[1].cpu())
+
+    pred_label = 1 if yes_prob > 0.5 else 0
+    pred_text = "Yes" if pred_label == 1 else "No"
+
+    return {
+        "prompt": prompt,
+        "pred_text": pred_text,
+        "pred_label": pred_label,
+        "yes_prob": yes_prob,
+        "no_prob": no_prob,
+    }
+
+def compute_metrics_with_ci_llm(results):
+
+    y_true = torch.tensor([r["ground_truth"] for r in results], dtype=torch.long)
+    y_score = torch.tensor([r["yes_prob"] for r in results], dtype=torch.float32)
+
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    y_true = y_true.to(device)
+    y_score = y_score.to(device)
+
+
+    auroc = BinaryAUROC().to(device)(y_score, y_true)
+    auprc = BinaryAveragePrecision().to(device)(y_score, y_true)
+
+
+    auroc_ci, auprc_ci = get_bootstrap_ci(y_true, y_score)
+
+    return {
+        "AUROC": float(auroc.cpu()),
+        "AUPRC": float(auprc.cpu()),
+        "AUROC_CI": auroc_ci,
+        "AUPRC_CI": auprc_ci,
+    }
+
+
+def predict_dataset(dataset,
+                    data_idx_path:str,
+                    window: str,
+                    task_name: str, 
+                    model_bundle: dict):
+    results = []
+    idx = pl.read_parquet(data_idx_path)
+    
+    for i in tqdm(range(len(dataset))):
+        sample = dataset[i]
+        row = idx.filter(pl.col('icustay_id') == int(sample.get("icustay_id")))
+        label = row[task_name][0]
+        query = sample[window]
+        split = row['split'][0]
+        if split != 'test':
+            continue
+        prediction = predict_yes_no_probability(
+            ehr_text="\n".join(query),
+            task_name=task_name,
+            model_bundle=model_bundle,
+        )
+
+        results.append({
+            "subject_id": sample.get("subject_id"),
+            "stay_id": sample.get("icustay_id"),
+            "ground_truth": label,
+            "yes_prob": prediction["yes_prob"],
+            "no_prob": prediction["no_prob"],
+        })
+
+    return results

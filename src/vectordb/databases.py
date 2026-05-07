@@ -1,6 +1,8 @@
 
+import os
 import json
 import torch
+import faiss
 import numpy as np
 import polars as pl
 
@@ -8,11 +10,13 @@ import torch.nn as nn
 from tqdm import tqdm
 from datasets import load_from_disk
 from collections import defaultdict
-from transformers import RoFormerModel
 from ..models.models import EHREmbeddings
 from ..data.datasets import SequencesGenerator
 from typing import List, Dict, Union, Optional
+from ..models.utils import get_config_and_model_cls
+from .utils import build_index, to_list, build_faiss_index
 from chromadb.api.types import Documents, Embeddings, EmbeddingFunction
+
 
 
 
@@ -396,3 +400,148 @@ class VectorDBUploader:
 
             self.collection.upsert(ids=ids, documents=docs, metadatas=metas)
             del timeline_encoded, history_window, chunks, docs, ids, metas
+
+
+
+
+
+def build_indices(data_idx_path:str,
+                  hf_dataset_path: str,
+                  tokenizer_path: str,
+                  save_path:str,
+                  main_window_q: str,
+                  main_window_h: str,
+                  limits_dict: dict,
+                  ckpt_path: str,
+                  embedder_model: str = 'roformer',
+                  chunking_strategy:str='overlap',
+                  seq_length_q: int =1024,
+                  overlap_q: int=0,
+                  seq_length_h: int =256,
+                  overlap_h: int= 0,
+                  window_hours: float= 6.0
+                 )-> None:
+    
+    assert chunking_strategy in ['overlap','time','visit','care_stage']
+    
+    seq_gen_q = SequencesGenerator(tokenizer_path=tokenizer_path,
+                                   chunk_length=seq_length_q,
+                                   overlap=overlap_q)
+    
+    seq_gen_h = SequencesGenerator(tokenizer_path=tokenizer_path,
+                                   chunk_length=seq_length_h,
+                                   overlap=overlap_h)
+    
+    
+    data_idx = pl.read_parquet(data_idx_path)
+    hf_dataset= load_from_disk(hf_dataset_path)
+    
+    ConfigClassRet, ModelClassRet = get_config_and_model_cls(model_type=embedder_model, mode='eval', variant=None)
+
+    cfg_ret = ConfigClassRet(vocab_size=seq_gen_q.tokenizer.vocab_size,
+                             hidden_size=768,
+                             num_hidden_layers=12,
+                             num_attention_heads=12,
+                             intermediate_size=3072,
+                             max_position_embeddings=1536,
+                             pad_token_id=0,
+                             type_vocab_size= 28,
+                             visit_vocab_size= 102,
+                             stage_vocab_size= 5)
+
+    embedder = EHREmbedder(
+        config=cfg_ret,
+        backbone=ModelClassRet,
+        ckpt_path=ckpt_path,
+        pooling='mean')
+    
+    
+    if chunking_strategy == 'overlap':
+        needed_cols = ['subject_id','input_ids','attention_mask','visit_ids','stage_ids','type_ids']
+    elif chunking_strategy == 'time':
+        needed_cols = ['subject_id','input_ids','attention_mask','visit_ids','stage_ids','type_ids','time_stamp']
+    elif chunking_strategy == 'visit':
+        needed_cols = ['subject_id','input_ids','attention_mask','visit_ids','stage_ids','type_ids','seq_id']
+    elif chunking_strategy == 'care_stage':
+        needed_cols = ['subject_id','input_ids','attention_mask','visit_ids','stage_ids','type_ids',
+                       'seq_id', 'out_id', 'er_id', 'hadm_id', 'icustay_id']
+    
+    sub_ids = set(data_idx.get_column("subject_id").to_list())
+    hf_dataset = hf_dataset.filter(lambda sids: [sid in sub_ids for sid in sids],
+                                   batched=True,
+                                   input_columns="subject_id")
+
+    hf_dataset = (hf_dataset
+                       .flatten_indices()
+                       .select_columns(needed_cols)
+                       .with_format("numpy", columns=needed_cols, 
+                                    output_all_columns=False))
+
+    index =  build_index(hf_dataset)
+    
+    for i in tqdm(range(len(data_idx))):
+        row_idx = i
+        stay = data_idx[row_idx]
+
+        subject_id = stay['subject_id'][0]
+        stay_id = stay['icustay_id'][0]
+
+        timeline_encoded = hf_dataset.select(index[subject_id])[0]
+
+        start_limit_q = limits_dict[main_window_q][seq_length_q][0]
+        end_limit_q = limits_dict[main_window_q][seq_length_q][1]
+        start_q = stay[start_limit_q][0]
+        end_q = stay[end_limit_q][0]
+
+
+        query = {k: to_list(v) for k, v in timeline_encoded.items()}
+        query = {k: (v[start_q:end_q] if isinstance(v, list) else v) for k, v in query.items()}
+        query = seq_gen_q.get_overlapped_chunks(timeline=query,add_cls_per_chunk=True)[0]
+        query = {k: query[k] for k in ["input_ids", "attention_mask", "visit_ids", "stage_ids", "type_ids"] if k in query}
+        query = {k: torch.tensor(v) for k, v in query.items()}
+
+
+        start_limit_h = limits_dict[main_window_h][seq_length_q][0]
+        end_limit_h = limits_dict[main_window_h][seq_length_q][1]
+        start_h = stay[start_limit_h][0] if isinstance(start_limit_h, str) else int(start_limit_h)
+        end_h = stay[end_limit_h][0] if isinstance(end_limit_h, str) else int(end_limit_h)
+
+        
+        history = {k: to_list(v) for k, v in timeline_encoded.items()} 
+        history = {k: (v[start_h:end_h] if isinstance(v, list) else v) for k, v in history.items()}
+        
+        if chunking_strategy == 'overlap':
+            history = seq_gen_h.get_overlapped_chunks(timeline=history,
+                                                      add_cls_per_chunk=True)
+        elif chunking_strategy == 'time':
+            history = seq_gen_h.get_time_based_chunks(timeline=history,
+                                                     window_hours=window_hours,
+                                                     keep_prefix_tokens=True,
+                                                     anchor_from_first_valid_time=True)
+        elif chunking_strategy == 'visit':
+            history = seq_gen_h.get_visit_level_chunks(timeline=history,
+                                                      keep_prefix_tokens=True)
+        elif chunking_strategy == 'care_stage':
+            history = seq_gen_h.get_care_stage_level_chunks(timeline=history,
+                                                           keep_prefix_tokens=True)
+        history = [{k: chunk[k] for k in ["input_ids", "attention_mask", "visit_ids", "stage_ids", "type_ids"] 
+                    if k in chunk} for chunk in history]
+        history = [{k: torch.tensor(v) for k, v in chunk.items()} for chunk in history]
+        history = {k: torch.stack([c[k] for c in history], dim=0) for k in history[0].keys()}
+
+        q_emb = embedder.encode(input_ids=query['input_ids'].unsqueeze(0),
+                                attention_mask=query['attention_mask'].unsqueeze(0),
+                                type_ids=query['type_ids'].unsqueeze(0),
+                                visit_ids=query['visit_ids'].unsqueeze(0),
+                                stage_ids=query['stage_ids'].unsqueeze(0))
+
+        ch_emb = embedder.encode(input_ids=history['input_ids'],
+                                 attention_mask=history['attention_mask'],
+                                 type_ids=history['type_ids'],
+                                 visit_ids=history['visit_ids'],
+                                 stage_ids=history['stage_ids'])
+
+        ch_emb = torch.cat((ch_emb,q_emb),dim=0)
+
+        idx, _ = build_faiss_index(ch_embs=ch_emb, metric='cosine')
+        faiss.write_index(idx, os.path.join(save_path,f"{stay_id}.faiss"))

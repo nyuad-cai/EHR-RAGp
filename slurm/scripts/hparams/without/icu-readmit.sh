@@ -7,13 +7,13 @@
 #SBATCH  -c 32
 #SBATCH  -o ./slurm/logs/%x.%J.out
 #SBATCH  -e ./slurm/logs/%x.%J.err
-#SBATCH  --gres=gpu:a100:1
+#SBATCH  --gres=gpu:h200:1
 
 ##SBATCH -q shamout
 
 ##SBATCH -q nvidia-xxl
 
-##SBATCH -q cair
+#SBATCH -q cair
 
 
 ##SBATCH  --constraint=80g
@@ -30,7 +30,8 @@ set -x
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/icu-readmit/longformer.yaml # continues
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/icu-readmit/big_bird.yaml # continues
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/icu-readmit/roformer.yaml # continues
-# done # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/icu-readmit/modernbert.yaml
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/icu-readmit/modernbert.yaml
+python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/icu-readmit/modernbert-long.yaml
 
 
 # # descemb cls-ft

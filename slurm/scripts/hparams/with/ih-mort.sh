@@ -1,41 +1,44 @@
 #!/bin/bash
 #SBATCH  -J ih-mort
-#SBATCH  -t 10-00:00:00
+#SBATCH  -t 4-00:00:00
 #SBATCH  -n 1
 #SBATCH  -N 1
 #SBATCH  -p nvidia
 #SBATCH  -c 16
 #SBATCH  -o ./slurm/logs/%x.%J.out
 #SBATCH  -e ./slurm/logs/%x.%J.err
-#SBATCH  --gres=gpu:a100:1
-#SBATCH  --constraint=80g
+
+##SBATCH  --gres=gpu:h200:1
+
+#SBATCH  --gres=gpu:h100:1
+
+##SBATCH  --gres=gpu:a100:1
+##SBATCH --constraint=80g
 
 #SBATCH -q shamout
-##SBATCH  -q nvidia-xxl
+##SBATCH -q nvidia-xxl
 ##SBATCH -q cair
 
 
 
-eval "$(conda shell.bash hook)"
-conda activate med-ehr
-set -x
-ORIG_DB=/scratch/sas10092/ehr-foundation/data/vectordbs/roformer/mean/within48_hist_full_1024_128
-LOCAL_DB=/tmpdata/chroma_${SLURM_JOB_ID}
+OVERLAY=/scratch/sas10092/ehr-foundation/overlay-512000M-15000K.ext3
+SIF=/share/apps/admin/singularity-images/centos-8.2.2004.sif
 
-echo "Copying Chroma DB to local /tmp..."
-rsync -a --delete "${ORIG_DB}/" "${LOCAL_DB}/"
+CHUNKING_STRATEGY=visit
+SPAN=256
+USE_PROTOTYPES=1
 
-echo "Copying Completed!"
+singularity exec --nv --overlay "${OVERLAY}:ro" "${SIF}" bash -lc "
+  source /share/apps/NYUAD5/miniconda/3-4.11.0/etc/profile.d/conda.sh
+  conda activate med-ehr
+  set -x
+  cd /scratch/sas10092/ehr-foundation
+  torchrun --master_port=$((20000 + (SLURM_JOB_ID % 20000))) --nproc_per_node=1 w_hparams_opt.py \
+  --config-path /scratch/sas10092/ehr-foundation/slurm/config/with_retrieval/hparams/ih-mort/behrt.yaml \
+  --chunking-strategy "${CHUNKING_STRATEGY}" \
+  --span "${SPAN}" \
+  $( [ "$USE_PROTOTYPES" -eq 1 ] && echo "--use-prototypes" )
+"
 
-chmod -R u+rwx "${LOCAL_DB}"
-
-export CHROMA_DB_PATH="${LOCAL_DB}"
-
-# torchrun --nproc_per_node=2  
-python w_hparams_opt.py \
-    --config-path /scratch/sas10092/ehr-foundation/slurm/config/with_retrieval/hparams/ih-mort/roformer.yaml \
-    --chroma-db-path "${CHROMA_DB_PATH}"
-
-echo "Job completed"
 
 

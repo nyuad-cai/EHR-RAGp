@@ -7,10 +7,10 @@
 #SBATCH  -c 32
 #SBATCH  -o ./slurm/logs/%x.%J.out
 #SBATCH  -e ./slurm/logs/%x.%J.err
-#SBATCH  --gres=gpu:a100:1
+#SBATCH  --gres=gpu:h100:1
 
-#SBATCH -q nvidia-xxl
-##SBATCH -q shamout
+##SBATCH -q nvidia-xxl
+#SBATCH -q shamout
 ##SBATCH -q cair
 
 
@@ -30,7 +30,8 @@ set -x
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/longformer.yaml # continues
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/big_bird.yaml # continues
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/roformer.yaml # continues
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/modernbert.yaml # continues
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/modernbert.yaml
+python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/long-los/modernbert-long.yaml
 
 
 

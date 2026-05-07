@@ -1,32 +1,22 @@
 backbone_name: roformer
-version: with_retrieval
+version: with_retrieval_final
 job_id: ${SLURM_JOB_ID}
-seed: 21
+
 
 model:
   ckpt_path: /scratch/sas10092/ehr-foundation/models/mlm/wandb/run-20251128_073215-roformer_13218339_1024_128_15_maskprob_12_5overlap/files/ckpt/epoch=65-step=665082.ckpt
 
-retriever:
-  ckpt_path: /scratch/sas10092/ehr-foundation/models/mlm/wandb/run-20251128_073215-roformer_13218339_1024_128_15_maskprob_12_5overlap/files/ckpt/epoch=65-step=665082.ckpt
-  pooling: mean 
-  normalize: True
 
-seq_gen:
-  tokenizer_path: /scratch/sas10092/ehr-foundation/vocab.json
-  seq_length: 1024
-  overlap: 0
 
 dataset:
   data_path: /scratch/sas10092/ehr-foundation/data/meds_normalized_arrow
   data_idx_path: /scratch/sas10092/ehr-foundation/downstream_idx.parquet
-  vectordb_path: /scratch/sas10092/ehr-foundation/data/vectordbs/roformer/mean/within_stay_hist_full_1024_128
+  tokenizer_path: /scratch/sas10092/ehr-foundation/vocab.json
   main_window_query: within_stay_query
+  main_window_history: within_stay_hist_full
   task: y_icu_readmit_30
-  top_k: 8
-
-dataloader:
-  batch_size: 4
-
+  seq_length_q: 1024
+  overlap_q: 0
 
 logger:
   wandb_api_key: 59b6438e0496b3089f91abef35d31dae69b6c009

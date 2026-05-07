@@ -4,12 +4,12 @@
 #SBATCH  -n 1
 #SBATCH  -N 1
 #SBATCH  -p nvidia
-#SBATCH  -c 32
+#SBATCH  -c 16
 #SBATCH  -o ./slurm/logs/%x.%J.out
 #SBATCH  -e ./slurm/logs/%x.%J.err
-#SBATCH  --gres=gpu:a100:1
+#SBATCH  --gres=gpu:h100:1
 
-##SBATCH -q cair
+#SBATCH -q cair
 
 ##SBATCH -q shamout
 
@@ -27,6 +27,7 @@ set -x
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/big_bird.yaml 
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/roformer.yaml 
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/modernbert.yaml 
+python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/modernbert-long.yaml 
 
 # # descemb cls-ft
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/descemb.yaml --freeze
@@ -36,10 +37,6 @@ set -x
 
 # genhpf
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/genhpf.yaml
-
-# remed
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/remed.yaml
-
 
 
 
@@ -55,6 +52,10 @@ set -x
 # cehrbert
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/cehrbert.yaml
 
+# remed
+# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/remed.yaml
+
 
 # ehrmaba
 # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/1y-mort/ehrmamba.yaml
+

@@ -10,3 +10,7 @@ toy_tokenizer_artifacts
 /models/
 ehs/
 desc_gen_dataset/
+vdb/
+figures
+overlay-51200M-1000K.ext3
+overlay-512000M-15000K.ext3

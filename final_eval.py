@@ -40,11 +40,11 @@ else:
     mode = 'final'
 
 
-learning_rate = 0.000012680316113284
-weight_decay = 0
-pooling = '' 
+learning_rate = 0.000269016592023212
+weight_decay = 0.0014355353210248
+pooling = 'cls' 
 use_numeric = False    
-dropout = 0.5
+dropout = 0.1
  
 
 
