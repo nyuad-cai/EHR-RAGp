@@ -179,7 +179,7 @@ elif pretrain_mode == "simclr":
     
 wandb.login(key=wandb_api_key)
 wandb_logger = WandbLogger(project='MedEHR_Pretraining',
-                           entity='nyuad-cai',
+                           entity=,
                            save_dir=log_dir,
                            version=f'{backbone_name}_{baseline}_{job_id}_{args.chunk_length}_{args.overlap}_{version}',
                            name=f'{backbone_name}_{baseline}_{job_id}_{args.learning_rate}_{args.chunk_length}_{args.overlap}_{version}',
