@@ -1,4 +1,4 @@
-# EHR-RAG: Retrieval-Augmented Prototype-Guided Foundation Model for Electronic Health Records
+# EHR-RAGp: Retrieval-Augmented Prototype-Guided Foundation Model for Electronic Health Records
 
 
 # Background
@@ -17,13 +17,11 @@ conda activate ehr-rag
 ```
 
 # Dataset
-We conduct all experiments using [**MIMIC-IV**](https://physionet.org/content/mimiciv/3.1/) V3.1, a publicly available, de-identified critical care electronic health record (EHR) dataset.  
-Access to the dataset requires credentialed approval from the data provider.  
-Raw data are not included in this repository and needs to be downloaded.
+We conduct all experiments using [**MIMIC-IV**](https://physionet.org/content/mimiciv/3.1/) V3.1, a publicly available, de-identified critical care electronic health record (EHR) dataset.  Access to the dataset requires approval from the data provider after completing the required training and signing the usage agreement.  Hence, Raw data are not included in this repository and need to be downloaded by the user.
 
 
 # MEDS Format
-We convert the raw EHR records into a standardized **event-oriented format** using publicly available tools based on the Medical [Event Data Standard (MEDS)](https://github.com/Medical-Event-Data-Standard).  
+We convert the raw EHR records into a standardized **event-oriented format** using publicly available tools based on the  [MedicalEvent Data Standard (MEDS)](https://github.com/Medical-Event-Data-Standard).  
 This conversion transforms the original tables into a consistent timeline representation, which serves as input for model training and evaluation.
 We leverage the official MEDS export tool available for MIMIC-IV V3.1, [MIMIC_IV_MEDS](https://github.com/Medical-Event-Data-Standard/MIMIC_IV_MEDS/tree/main/src/MIMIC_IV_MEDS)
 
@@ -35,25 +33,25 @@ To run pretraining experiments
 ```
 python pretrain.py
 ```
-## Baselines training (hyperparametrs tuning)
+## Baselines training (hyperparameters tuning)
 
-To run hyperparametres experiments
+To run hyperparameter experiments
 ```
 python wo_hparams_opt.py
 ```
 
-## EHR-RAG training (hyperparametrs tuning)
+## EHR-RAG training (hyperparameters tuning)
 
-To run hyperparametres tuning experiments
+To run hyperparameter tuning experiments
 ```
 python w_hparams_opt.py
 ```
 
-## Downstream eavaluation
+## Downstream evaluation
 
-To run hyperparametres experiments
+To run hyperparameter experiments
 ```
-python eval.py
+python final_eval.py
 ```
 
 # Citation
