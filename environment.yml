@@ -3,38 +3,38 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - _libgcc_mutex=0.1=main
-  - _openmp_mutex=5.1=1_gnu
-  - binutils=2.40=h4852527_7
-  - binutils_impl_linux-64=2.40=h5293946_0
-  - binutils_linux-64=2.40.0=hc2dff05_2
-  - c-compiler=1.5.2=h0b41bf4_0
-  - ca-certificates=2025.7.9=hbd8a1cb_0
-  - cxx-compiler=1.5.2=hf52228f_0
-  - gcc=11.2.0=h702ea55_10
-  - gcc_impl_linux-64=11.2.0=h1234567_1
-  - gcc_linux-64=11.2.0=h5c386dc_2
-  - gxx=11.2.0=h702ea55_10
-  - gxx_impl_linux-64=11.2.0=h1234567_1
-  - gxx_linux-64=11.2.0=hc2dff05_2
-  - kernel-headers_linux-64=3.10.0=he073ed8_18
-  - ld_impl_linux-64=2.40=h12ee557_0
-  - libffi=3.4.4=h6a678d5_1
-  - libgcc-devel_linux-64=11.2.0=h1234567_1
-  - libgcc-ng=11.2.0=h1234567_1
-  - libgomp=11.2.0=h1234567_1
-  - libstdcxx-devel_linux-64=11.2.0=h1234567_1
-  - libstdcxx-ng=11.2.0=h1234567_1
-  - ncurses=6.4=h6a678d5_0
-  - openssl=3.0.16=h5eee18b_0
-  - python=3.9.21=he870216_1
-  - readline=8.2=h5eee18b_0
-  - sqlite=3.45.3=h5eee18b_0
-  - sysroot_linux-64=2.17=h0157908_18
-  - tk=8.6.14=h39e8969_0
-  - wheel=0.45.1=py39h06a4308_0
-  - xz=5.6.4=h5eee18b_1
-  - zlib=1.2.13=h5eee18b_1
+  - _libgcc_mutex=0.1
+  - _openmp_mutex=5.1
+  - binutils=2.40
+  - binutils_impl_linux-64=2.40
+  - binutils_linux-64=2.40.0
+  - c-compiler=1.5.2
+  - ca-certificates=2025.7.9
+  - cxx-compiler=1.5.2
+  - gcc=11.2.0
+  - gcc_impl_linux-64=11.2.0
+  - gcc_linux-64=11.2.0
+  - gxx=11.2.0
+  - gxx_impl_linux-64=11.2.0
+  - gxx_linux-64=11.2.0
+  - kernel-headers_linux-64=3.10.0
+  - ld_impl_linux-64=2.40
+  - libffi=3.4.4
+  - libgcc-devel_linux-64=11.2.0
+  - libgcc-ng=11.2.0
+  - libgomp=11.2.0
+  - libstdcxx-devel_linux-64=11.2.0
+  - libstdcxx-ng=11.2.0
+  - ncurses=6.4
+  - openssl=3.0.16
+  - python=3.9.21
+  - readline=8.2
+  - sqlite=3.45.3
+  - sysroot_linux-64=2.17
+  - tk=8.6.14
+  - wheel=0.45.1
+  - xz=5.6.4
+  - zlib=1.2.13
   - pip:
       - accelerate==1.8.1
       - adbc-driver-manager==1.6.0
@@ -92,6 +92,7 @@ dependencies:
       - exceptiongroup==1.2.2
       - executing==2.2.0
       - faicons==0.2.2
+      - faiss-gpu==1.7.2
       - fastapi==0.116.0
       - fastapi-cli==0.0.8
       - fastapi-cloud-cli==0.1.2
@@ -169,7 +170,7 @@ dependencies:
       - networkx==3.2.1
       - ninja==1.11.1.4
       - numba==0.60.0
-      - numpy==2.0.2
+      - numpy==1.26.4
       - nvidia-cublas-cu12==12.6.4.1
       - nvidia-cuda-cupti-cu12==12.6.80
       - nvidia-cuda-nvrtc-cu12==12.6.77
@@ -207,7 +208,7 @@ dependencies:
       - partial-json-parser==0.2.1.1.post6
       - pexpect==4.9.0
       - pillow==11.1.0
-      - pip==25.3
+      - pip==26.0.1
       - platformdirs==4.3.6
       - polars==1.30.0
       - posthog==5.4.0
@@ -252,6 +253,7 @@ dependencies:
       - rignore==0.5.1
       - rpds-py==0.25.1
       - rsa==4.9.1
+      - sacremoses==0.1.1
       - safetensors==0.5.3
       - scikit-learn==1.6.1
       - scikit-multilearn==0.2.0
@@ -311,4 +313,4 @@ dependencies:
       - zope-event==5.0
       - zope-interface==7.2
       - zstandard==0.25.0
-prefix: /home/sas10092/.conda/envs/med-ehr
+prefix: path/to/

@@ -5,7 +5,7 @@ from src.vectordb.databases import build_indices
 data_idx_path = './downstream_idx.parquet'
 hf_dataset_path = './data/meds_normalized_arrow/'
 tokenizer_path = './vocab.json'
-ckpt_path = './models/mlm/wandb/run-20251128_073215-roformer_13218339_1024_128_15_maskprob_12_5overlap/files/ckpt/epoch=65-step=665082.ckpt'
+ckpt_path = 'path/to/'
 embedder_model = 'roformer'
 
 seq_length_q = 512

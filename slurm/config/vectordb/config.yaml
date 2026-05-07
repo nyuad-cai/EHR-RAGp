@@ -28,21 +28,20 @@ main_window: within_stay_hist_full
 
 
 
-ckpt_path: /scratch/sas10092/ehr-foundation/models/mlm/wandb/run-20251128_073215-roformer_13218339_1024_128_15_maskprob_12_5overlap/files/ckpt/epoch=65-step=665082.ckpt
-
+ckpt_path:
 seq_gen:
-  tokenizer_path: /scratch/sas10092/ehr-foundation/vocab.json
+  tokenizer_path: 
   
 
 dataset:
-  data_path: /scratch/sas10092/ehr-foundation/data/meds_normalized_arrow
-  data_idx_path: /scratch/sas10092/ehr-foundation/downstream_idx.parquet
+  data_path: 
+  data_idx_path: 
   
 embedder:
   pool: mean
 
 client:
-  path: /scratch/sas10092/ehr-foundation/data/vectordbs/roformer/mean/
+  path: 
 
 
 

@@ -9,14 +9,7 @@
 #SBATCH  -e ./slurm/logs/%x.%J.err
 #SBATCH  --gres=gpu:a100:1
 
-##SBATCH -q shamout
 
-##SBATCH -q nvidia-xxl
-
-##SBATCH -q cair
-
-
-##SBATCH  --constraint=80g
 
 
 eval "$(conda shell.bash hook)"
@@ -26,39 +19,37 @@ set -x
 
 
 
-# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/icu-readmit/roberta.yaml
-# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/icu-readmit/longformer.yaml 
-# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/icu-readmit/big_bird.yaml 
-# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/icu-readmit/roformer.yaml 
-# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/icu-readmit/modernbert.yaml
-
+# python final_eval.py --config-path path/to/roberta.yaml
+# python final_eval.py --config-path path/to/longformer.yaml 
+# python final_eval.py --config-path path/to/big_bird.yaml 
+python final_eval.py --config-path path/to/roformer.yaml 
+# python final_eval.py --config-path path/to/modernbert.yaml 
 
 # # descemb cls-ft
-# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/icu-readmit/descemb.yaml --freeze
+# python final_eval.py --config-path path/to/descemb.yaml --freeze
 
 # # descemb -funetune
-# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/icu-readmit/descemb.yaml
+# python final_eval.py --config-path path/to/descemb.yaml
 
 # genhpf
-# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/icu-readmit/genhpf.yaml
+# python final_eval.py --config-path path/to/genhpf.yaml
 
 # remed
-# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/icu-readmit/remed.yaml
+# python final_eval.py --config-path path/to/remed.yaml
 
-
-
-# med-bert
-# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/icu-readmit/medbert.yaml
-
-# cehrbert
-# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/icu-readmit/cehrbert.yaml
-
-# behrt
-# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/icu-readmit/behrt.yaml
 
 # hibehrt
-# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/icu-readmit/hibehrt.yaml
+# python final_eval.py --config-path path/to/hibehrt.yaml
+
+# medbert
+# python final_eval.py --config-path path/to/medbert.yaml
+
+# behrt
+# python final_eval.py --config-path path/to/behrt.yaml
+
+# cehrbert
+# python final_eval.py --config-path path/to/cehrbert.yaml
 
 
 # ehrmaba
-# python final_eval.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/eval/icu-readmit/ehrmamba.yaml
+# python final_eval.py --config-path path/to/ehrmamba.yaml

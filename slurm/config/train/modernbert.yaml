@@ -1,0 +1,24 @@
+task: y_mort_1yr
+backbone_name: modernbert
+main_window: within_stay_query
+version: without_retrieval
+job_id: ${SLURM_JOB_ID}
+
+ckpt_path: 
+seq_gen:
+  tokenizer_path: 
+  seq_length: 1024
+  overlap: 0
+
+dataset:
+  data_path: 
+  data_idx_path: 
+
+dataloader:
+  batch_size: 32
+
+logger:
+  wandb_api_key: 
+  project: 
+  entity: 
+  log_dir: 

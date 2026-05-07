@@ -9,9 +9,6 @@
 #SBATCH  -e ./slurm/logs/%x.%J.err
 #SBATCH  --gres=gpu:h200:1
 
-##SBATCH -q nvidia-xxl
-#SBATCH -q shamout
-##SBATCH -q cair
 
 
 ##SBATCH  --constraint=80g
@@ -23,43 +20,40 @@ conda activate med-ehr
 set -x
 
 
-# done # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/bert.yaml
-# done # python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/roberta.yaml
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/longformer.yaml # continues
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/big_bird.yaml # continues
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/roformer.yaml # continues
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/modernbert.yaml
-python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/modernbert-long.yaml
-
-
+# python wo_hparams_opt.py --config-path path/to/bert.yaml
+# python wo_hparams_opt.py --config-path path/to/roberta.yaml
+# python wo_hparams_opt.py --config-path path/to/longformer.yaml 
+# python wo_hparams_opt.py --config-path path/to/big_bird.yaml 
+# python wo_hparams_opt.py --config-path path/to/roformer.yaml 
+# python wo_hparams_opt.py --config-path path/to/modernbert.yaml 
+python wo_hparams_opt.py --config-path path/to/modernbert-long.yaml 
 
 # # descemb cls-ft
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/descemb.yaml --freeze
+# python wo_hparams_opt.py --config-path path/to/descemb.yaml --freeze
 
 # # descemb -funetune
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/descemb.yaml
+# python wo_hparams_opt.py --config-path path/to/descemb.yaml
 
 # genhpf
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/genhpf.yaml
-
-# remed
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/remed.yaml
+# python wo_hparams_opt.py --config-path path/to/genhpf.yaml
 
 
-
-
-# med-bert
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/medbert.yaml
-
-# cehrbert
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/cehrbert.yaml
-
-# behrt
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/behrt.yaml
 
 # hibehrt
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/hibehrt.yaml
+# python wo_hparams_opt.py --config-path path/to/hibehrt.yaml
+
+# medbert
+# python wo_hparams_opt.py --config-path path/to/medbert.yaml
+
+# behrt
+# python wo_hparams_opt.py --config-path path/to/behrt.yaml
+
+# cehrbert
+# python wo_hparams_opt.py --config-path path/to/cehrbert.yaml
+
+# remed
+# python wo_hparams_opt.py --config-path path/to/remed.yaml
 
 
 # ehrmaba
-# python wo_hparams_opt.py --config-path /scratch/sas10092/ehr-foundation/slurm/config/hparams/ih-mort/ehrmamba.yaml
+# python wo_hparams_opt.py --config-path path/to/ehrmamba.yaml

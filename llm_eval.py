@@ -13,12 +13,12 @@ parser.add_argument('--model-name', type=str, required=True)
 args = parser.parse_args()
 
 
-os.environ['HUGGINGFACE_HUB_TOKEN'] = "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"
-os.environ["HF_TOKEN"] = "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"
+os.environ['HUGGINGFACE_HUB_TOKEN'] = "add"
+os.environ["HF_TOKEN"] = "add"
 
 hf_token = os.getenv("HF_TOKEN")
 
-CUSTOM_CACHE = "/scratch/sas10092/huggingface_cache"
+CUSTOM_CACHE = "path/to/"
 os.environ["HF_HOME"] = CUSTOM_CACHE
 os.environ["TRANSFORMERS_CACHE"] = CUSTOM_CACHE
 os.environ["HUGGINGFACE_HUB_CACHE"] = CUSTOM_CACHE
@@ -26,30 +26,30 @@ os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 os.environ["TORCH_USE_CUDA_DSA"] = "1"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
-os.environ['CC']="/share/apps/NYUAD5/gcc/9.2.0/bin/gcc"
-os.environ['CXX']="/share/apps/NYUAD5/gcc/9.2.0/bin/g++"
+os.environ['CC']="path/to/"
+os.environ['CXX']="path/to/"
 
 # Qwen/Qwen2.5-7B-Instruct
 # google/medgemma-1.5-4b-it
 model_name=args.model_name
 print(model_name)
-dataset_path = "/scratch/sas10092/ehr-foundation/data/desc_gen_dataset"
-data_idx_path = '/scratch/sas10092/ehr-foundation/downstream_idx.parquet'
+dataset_path = "path/to/descemb_dataset"
+data_idx_path = './downstream_idx.parquet'
 dataset = load_from_disk(dataset_path)
 
 
 
-# window = 'within_stay_descemb'
-# task = 'y_mort_1yr'
-# print('Running task: ', task)
-# bundle = load_hf_model(model_name=model_name, hf_token=hf_token)
-# results = predict_dataset(dataset=dataset, data_idx_path=data_idx_path, window=window, task_name=task, model_bundle=bundle) 
-# metrics = compute_metrics_with_ci_llm(results)
-# print(metrics)
-# del bundle
-# gc.collect()
-# torch.cuda.empty_cache()
-# print('Finished task: ', task)
+window = 'within_stay_descemb'
+task = 'y_mort_1yr'
+print('Running task: ', task)
+bundle = load_hf_model(model_name=model_name, hf_token=hf_token)
+results = predict_dataset(dataset=dataset, data_idx_path=data_idx_path, window=window, task_name=task, model_bundle=bundle) 
+metrics = compute_metrics_with_ci_llm(results)
+print(metrics)
+del bundle
+gc.collect()
+torch.cuda.empty_cache()
+print('Finished task: ', task)
 
 
 window = 'within_stay_descemb'

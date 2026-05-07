@@ -9,13 +9,7 @@
 #SBATCH  -e ./slurm/logs/%x.%J.err
 #SBATCH  --gres=gpu:h200:1
 
-##SBATCH  --constraint=80g
 
-##SBATCH -q cair
-
-##SBATCH -q shamout
-
-#SBATCH  -q nvidia-xxl
 
 python llm_eval.py --model-name epfl-llm/meditron-7b
 
