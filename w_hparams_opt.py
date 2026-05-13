@@ -200,26 +200,6 @@ def objective(trial: optuna.trial.Trial) -> float:
                                          window_hours= window_hours,
                                          split= 'val')
         
-        test_dataset = RetrievalDataset(data_idx_path=config['dataset']['data_idx_path'],
-                                         dataset_path= config['dataset']['data_path'],
-                                        vectordb_path=f"/faiss/{config['dataset']['seq_length_q']}/{args.chunking_strategy}/{span_dir}/{window}",
-                                        tokenizer_path=config['dataset']['tokenizer_path'],
-                                        limits_dict=limits,
-                                        chunking_strategy= args.chunking_strategy,
-                                        task= config['dataset']['task'],
-                                        query_window=config['dataset']['main_window_query'],
-                                        history_window=config['dataset']['main_window_history'],
-                                        top_k=top_k,
-                                        seq_length_q = config['dataset']['seq_length_q'],
-                                        overlap_q= config['dataset']['overlap_q'],
-                                        seq_length_h= seq_length_h,
-                                        overlap_h=overlap_h,
-                                        use_time= True,
-                                        use_numeric= True,
-                                        add_cls=True,
-                                        window_hours= window_hours,
-                                        split= 'test')
-        
 
         
 
@@ -253,17 +233,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                                     pin_memory_device='cuda',
                                     drop_last=True,
                                     ) 
-        test_dataloader = DataLoader(dataset=test_dataset,
-                                    batch_size=batch_size,
-                                    shuffle=True,
-                                    collate_fn=retrieval_collator,
-                                    num_workers=4,
-                                    prefetch_factor=2,
-                                    persistent_workers=True,
-                                    pin_memory=True,
-                                    pin_memory_device='cuda',
-                                    drop_last=True,
-                                    )  
+ 
 
         ConfigClass, ModelClass = get_config_and_model_cls(model_type=config['backbone_name'], mode='eval', variant=config.get('variant', None))
 
@@ -367,7 +337,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                             )
 
         trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
-        trainer.test(model=model, dataloaders=test_dataloader, ckpt_path='best')
+
         # shutil.rmtree(ckpt_dir, ignore_errors=True)
 
     except optuna.exceptions.TrialPruned:

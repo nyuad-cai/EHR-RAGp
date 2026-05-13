@@ -337,17 +337,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                                         use_numeric=use_numeric,
                                         split='val',
                                         use_long_context= True if config['seq_gen']['seq_length'] >1024 else False)
-            test_dataset = EvalDataset(dataset_path=config['dataset']['data_path'],
-                                        data_idx_path=config['dataset']['data_idx_path'],
-                                        seq_gen=seq_gen,
-                                        seq_length=config['seq_gen']['seq_length'],
-                                        limits_dict=limits,
-                                        main_window=config['main_window'],
-                                        task=config['task'],
-                                        use_time=True,
-                                        use_numeric=use_numeric,
-                                        split='test',
-                                        use_long_context= True if config['seq_gen']['seq_length'] >1024 else False)
+
             cfg = ConfigClass(
                 vocab_size=seq_gen.tokenizer.vocab_size,
                 cls_token_id=seq_gen.tokenizer.cls_id,
@@ -521,14 +511,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                                     pin_memory=True,
                                     persistent_workers=True,
                                     prefetch_factor=4)
-        test_dataloader = DataLoader(dataset=test_dataset,
-                                    batch_size=config['dataloader']['batch_size'],
-                                    num_workers=8,
-                                    shuffle=False,
-                                    collate_fn=collate_fn,
-                                    pin_memory=True,
-                                    persistent_workers=True,
-                                    prefetch_factor=4)      
+    
 
         wandb.login(key=config['logger']['wandb_api_key'])
 
@@ -577,7 +560,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                             )
         trainer.logger.log_hyperparams(hparams)
         trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
-        trainer.test(model=model, dataloaders=test_dataloader,ckpt_path='best')
+
     except optuna.exceptions.TrialPruned:
         wandb.finish()
         raise
