@@ -1,23 +1,23 @@
-# phase1 : aggregate and occlude outliers
-# base: meds_final | Out: meds_outliers
+phase1 : aggregate and occlude outliers
+base: meds_final | Out: meds_outliers
 
 
-# input_dir: /scratch/sas10092/ehr-foundation/data/meds_final
-# output_dir: /scratch/sas10092/ehr-foundation/data/meds_outliers
+input_dir: /scratch/sas10092/ehr-foundation/data/meds_final
+output_dir: /scratch/sas10092/ehr-foundation/data/meds_outliers
 
-# stages:
-#   # 1) Aggregate stats needed to detect outliers (μ, σ via sums & sums of squares)
-#   - aggregate_code_metadata:
-#       aggregations:
-#         - values/n_occurrences
-#         - values/sum
-#         - values/sum_sqd
-#         - values/min
-#         - values/max
+stages:
+  # 1) Aggregate stats needed to detect outliers (μ, σ via sums & sums of squares)
+  - aggregate_code_metadata:
+      aggregations:
+        - values/n_occurrences
+        - values/sum
+        - values/sum_sqd
+        - values/min
+        - values/max
 
-#   # 2) Occlude numeric outliers beyond k·σ (k=3 is a solid default)
-#   - occlude_outliers:
-#       stddev_cutoff: 3
+  # 2) Occlude numeric outliers beyond k·σ (k=3 is a solid default)
+  - occlude_outliers:
+      stddev_cutoff: 3
 
 
 
@@ -28,32 +28,32 @@
 # note3 (optional): apply the normalization function to the output of this stage in place by looping over the output 
 
 
-# input_dir: /scratch/sas10092/ehr-foundation/data/meds_outliers
-# output_dir: /scratch/sas10092/ehr-foundation/meds_normalized
+input_dir: /scratch/sas10092/ehr-foundation/data/meds_outliers
+output_dir: /scratch/sas10092/ehr-foundation/meds_normalized
 
-# stages: 
-#   # 3) Re-aggregate after occlusion (so normalization uses clean stats)
-#   - aggregate_code_metadata:
-#       aggregations:
-#         - values/n_occurrences
-#         - values/sum
-#         - values/sum_sqd
-#         - code/n_occurrences
-#         - code/n_subjects
-#         - values/min
-#         - values/max
+stages: 
+  # 3) Re-aggregate after occlusion (so normalization uses clean stats)
+  - aggregate_code_metadata:
+      aggregations:
+        - values/n_occurrences
+        - values/sum
+        - values/sum_sqd
+        - code/n_occurrences
+        - code/n_subjects
+        - values/min
+        - values/max
 
-#   # 4) Build/refresh the code vocabulary (needed by downstream steps)
-#   - fit_vocabulary_indices
+  # 4) Build/refresh the code vocabulary (needed by downstream steps)
+  - fit_vocabulary_indices
 
-#   # 5) Fit μ, σ on the cleaned data (per code), then apply z = (x-μ)/σ
-#   - fit_normalization:
-#       _base_stage: aggregate_code_metadata
-#       aggregations:
-#         - values/n_occurrences
-#         - values/sum
-#         - values/sum_sqd
-#   - normalization
+  # 5) Fit μ, σ on the cleaned data (per code), then apply z = (x-μ)/σ
+  - fit_normalization:
+      _base_stage: aggregate_code_metadata
+      aggregations:
+        - values/n_occurrences
+        - values/sum
+        - values/sum_sqd
+  - normalization
 
 
 

@@ -21,7 +21,7 @@
 
 
 
-export TOKENIZER_PATH="/scratch/sas10092/ehr-foundation/vocab.json"
+export TOKENIZER_PATH="/scratch/sas10092/ehr-foundation/resources/vocab.json"
 #export DATA_PATH="/scratch/sas10092/ehr-foundation/data/meds_normalized_arrow"
 export DATA_PATH="/scratch/sas10092/ehr-foundation/data/desc_gen_dataset/"
 #export DATA_IDX_PATH="/scratch/sas10092/ehr-foundation/pretrain_idx.parquet"

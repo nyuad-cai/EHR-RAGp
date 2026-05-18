@@ -1,11 +1,15 @@
 import os
-
+import yaml
+import shutil
+import tempfile
+import subprocess
 import numpy as np
 import pandas as pd
 import polars as pl
 
 
 from tqdm import tqdm
+from pathlib import Path
 from datetime import time, timedelta
 
 
@@ -514,3 +518,170 @@ def get_mortality_labels(data_path: str) -> pl.DataFrame:
     return df
 
 
+
+
+
+def run_meds_transform_from_dict(config: dict):
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        yaml.safe_dump(config, f, sort_keys=False)
+        config_fp = f.name
+
+    try:
+        subprocess.run(
+            [
+                "MEDS_transform-runner",
+                f"pipeline_config_fp={config_fp}",
+                "~parallelize",
+            ],
+            check=True,
+        )
+    finally:
+        os.remove(config_fp)
+
+# MEDS-tranform configs phase1: basic metadata aggregation and outlier occlusion
+phase1_config = {
+    "input_dir": None,
+    "output_dir": None,
+    "stages": [
+        {
+            "aggregate_code_metadata": {
+                "aggregations": [
+                    "values/n_occurrences",
+                    "values/sum",
+                    "values/sum_sqd",
+                    "values/min",
+                    "values/max",
+                ]
+            }
+        },
+        {
+            "occlude_outliers": {
+                "stddev_cutoff": 3,
+            }
+        },
+    ],
+}
+# MEDS-transform configs phase2: advanced metadata, vocab indexing, normalization
+phase2_config = {
+    "input_dir": None,
+    "output_dir": None,
+    "stages": [
+        {
+            "aggregate_code_metadata": {
+                "aggregations": [
+                    "values/n_occurrences",
+                    "values/sum",
+                    "values/sum_sqd",
+                    "code/n_occurrences",
+                    "code/n_subjects",
+                    "values/min",
+                    "values/max",
+                ]
+            }
+        },
+        "fit_vocabulary_indices",
+        {
+            "fit_normalization": {
+                "_base_stage": "aggregate_code_metadata",
+                "aggregations": [
+                    "values/n_occurrences",
+                    "values/sum",
+                    "values/sum_sqd",
+                ],
+            }
+        },
+        "normalization",
+    ],
+}
+
+
+
+from datasets import Dataset, Features, Sequence, Value
+import os
+import polars as pl
+
+
+def build_arrow_dataset(
+    data_idx_fp,
+    normalized_train_dir,
+    output_dir,
+    seq_gen,
+    writer_batch_size=1000,
+):
+    data_idx = pl.read_parquet(data_idx_fp)
+
+    features = Features({
+        "subject_id": Value("int32"),
+        "input_ids": Sequence(Value("int32")),
+        "attention_mask": Sequence(Value("int8")),
+        "visit_ids": Sequence(Value("int16")),
+        "stage_ids": Sequence(Value("int8")),
+        "type_ids": Sequence(Value("int16")),
+        "numeric_values": Sequence(Value("float32")),
+        "numeric_mask": Sequence(Value("int8")),
+        "text_values": Sequence(Value("string")),
+        "text_mask": Sequence(Value("int8")),
+        "time_diff": Sequence(Value("float32")),
+        "time_stamp": Sequence(Value("timestamp[s]")),
+        "seq_id": Sequence(Value("int32")),
+        "out_id": Sequence(Value("int32")),
+        "er_id": Sequence(Value("int32")),
+        "hadm_id": Sequence(Value("int32")),
+        "icustay_id": Sequence(Value("int32")),
+    })
+
+    def gen():
+        shard_cache = {}
+
+        for row in data_idx.iter_rows(named=True):
+            subject_id = row["subject_id"]
+            shard = row["shard"]
+
+            if shard not in shard_cache:
+                shard_cache[shard] = pl.read_parquet(
+                    os.path.join(normalized_train_dir, shard)
+                )
+
+            file_df = shard_cache[shard]
+            seq = file_df.filter(pl.col("subject_id") == subject_id)
+
+            ex = seq_gen.encode_sequence(seq)
+
+            yield {
+                "subject_id": int(subject_id),
+                "input_ids": ex["input_ids"],
+                "attention_mask": ex["attention_mask"],
+                "visit_ids": ex["visit_ids"],
+                "stage_ids": ex["stage_ids"],
+                "type_ids": ex["type_ids"],
+                "numeric_values": ex["numeric_values"],
+                "numeric_mask": ex["numeric_mask"],
+                "text_values": ex["text_values"],
+                "text_mask": ex["text_mask"],
+                "time_diff": ex["time_diff"],
+                "time_stamp": ex["time_stamp"],
+                "seq_id": ex["seq_id"],
+                "out_id": ex["out_id"],
+                "er_id": ex["er_id"],
+                "hadm_id": ex["hadm_id"],
+                "icustay_id": ex["icustay_id"],
+            }
+
+    ds_arrow = Dataset.from_generator(
+        gen,
+        features=features,
+        writer_batch_size=writer_batch_size,
+    )
+
+    ds_arrow.save_to_disk(output_dir)
+
+
+
+def empty_dir(path):
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    for item in path.iterdir():
+        if item.is_dir():
+            shutil.rmtree(item)
+        else:
+            item.unlink()

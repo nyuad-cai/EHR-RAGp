@@ -2,13 +2,13 @@ import os
 from src.data.datasets import limits
 from src.vectordb.databases import build_indices
 
-data_idx_path = './downstream_idx.parquet'
+data_idx_path = './resources/downstream_idx.parquet'
 hf_dataset_path = './data/meds_normalized_arrow/'
-tokenizer_path = './vocab.json'
+tokenizer_path = './resources/vocab.json'
 ckpt_path = './models/mlm/wandb/run-20251128_073215-roformer_13218339_1024_128_15_maskprob_12_5overlap/files/ckpt/epoch=65-step=665082.ckpt'
 embedder_model = 'roformer'
 
-seq_length_q = 512
+seq_length_q = 1024
 overlap_q = 0
 
 windows = [

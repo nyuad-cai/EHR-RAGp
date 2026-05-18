@@ -1,74 +1,379 @@
 # EHR-RAGp: Retrieval-Augmented Prototype-Guided Foundation Model for Electronic Health Records
 
+<p align="center">
+  <img src="assets/main-figure.png" width="95%">
+</p>
 
-# Background
+<p align="center">
+  <a href="https://arxiv.org/abs/2605.12335">Paper</a> |
+  <a href="https://github.com/nyuad-cai/EHR-RAGp">Code</a>
+</p>
 
-Electronic Health Records (EHR) contain rich longitudinal patient information and are widely used in predictive modeling applications. However, effectively leveraging historical data remains challenging due to long trajectories, heterogeneous events, temporal irregularity, and the varying relevance of past clinical context. Existing approaches often rely on fixed windows or uniform aggregation, which can obscure clinically important signals. In this work, we introduce \texttt{EHR-RAGp}, a retrieval-augmented foundation model that dynamically integrates the most relevant patient history across diverse clinical event types. We propose a prototype-guided retrieval module that acts as an alignment mechanism and estimates the relevance of retrieved historical chunks with respect to a given prediction task, guiding the model towards the most informative context. Across multiple clinical prediction tasks, \texttt{EHR-RAGp} consistently outperforms state-of-the-art EHR foundation model and transformer-based baselines. Furthermore, integrating \texttt{EHR-RAGp} with existing clinical foundation models yields substantial performance gains. Overall, \texttt{EHR-RAGp} provides a scalable and efficient framework for leveraging long-range clinical context to improve downstream performance.
+---
 
-![EHR-RAG](assets/main-figure.png)
+# Table of Contents
 
+- [Overview](#overview)
+- [Key Features](#key-features)
+- [Repository Structure](#repository-structure)
+- [Environment Setup](#environment-setup)
+- [Dataset](#dataset)
+- [MEDS Conversion](#meds-conversion)
+- [Data Preprocessing](#data-preprocessing)
+- [Vector Index Setup](#vector-index-setup)
+- [Patient Timeline Construction](#patient-timeline-construction)
+- [Pretraining](#pretraining)
+- [Baseline Training](#baseline-training)
+- [EHR-RAGp Training](#ehr-ragp-training)
+- [Evaluation](#evaluation)
+- [Results](#results)
+- [Reproducibility Notes](#reproducibility-notes)
+- [Hardware Requirements](#hardware-requirements)
+- [Configuration](#configuration)
+- [Citation](#citation)
+- [Acknowledgements](#acknowledgements)
+
+---
+
+# Overview
+
+Electronic Health Records (EHR) contain rich longitudinal patient information and are widely used in predictive modeling applications. However, effectively leveraging historical data remains challenging due to long trajectories, heterogeneous events, temporal irregularity, and the varying relevance of past clinical context.
+
+EHR-RAGp is a retrieval-augmented foundation model for structured EHR data that dynamically retrieves and integrates clinically relevant patient history using a prototype-guided retrieval mechanism.
+
+The framework:
+- Constructs longitudinal patient trajectory databases
+- Retrieves relevant historical segments
+- Aligns retrievals using latent prototypes
+- Fuses retrieved history with current patient state
+- Supports multiple downstream clinical prediction tasks
+
+---
+
+# Key Features
+
+- Retrieval-augmented EHR foundation modeling
+- Prototype-guided retrieval alignment
+- Multi-granular chunking strategies
+- Longitudinal patient trajectory modeling
+- MEDS-based standardized EHR representation
+- Compatible with existing EHR foundation models
+- Fully reproducible MIMIC-IV pipeline
+
+---
+
+# Repository Structure
+
+```bash
+EHR-RAGp/
+│
+├── assets/                     # Figures and visualizations
+├── configs/                    # Experiment configurations
+├── data/                       # Processed MEDS data
+├── preprocessing/              # Preprocessing scripts
+├── models/                     # Model implementations
+├── retrieval/                  # Retrieval modules
+├── baselines/                  # Baseline implementations
+├── experiments/                # Training/evaluation scripts
+├── utils/                      # Utility functions
+│
+├── preprocess.py
+├── pretrain.py
+├── wo_hparams_opt.py
+├── w_hparams_opt.py
+├── final_eval.py
+│
+├── environment.yml
+└── README.md
+```
+
+---
 
 # Environment Setup
-To run this repo, you must install and run the libraries in the YAML file below.
 
-```
+Create the conda environment:
+
+```bash
 conda env create -f environment.yml
-conda activate ehr-rag
+conda activate ehr-ragp
 ```
+
+---
 
 # Dataset
-We conduct all experiments using [**MIMIC-IV**](https://physionet.org/content/mimiciv/3.1/) V3.1, a publicly available, de-identified critical care electronic health record (EHR) dataset.  Access to the dataset requires approval from the data provider after completing the required training and signing the usage agreement.  Hence, Raw data are not included in this repository and need to be downloaded by the user.
+
+All experiments are conducted using:
+
+- **MIMIC-IV v3.1**
+- Link: https://physionet.org/content/mimiciv/3.1/
+
+Access requires:
+1. PhysioNet account
+2. CITI Program training: **Data or Specimens Only Research**
+3. Data usage agreement signage
+
+Raw patient data are NOT distributed in this repository.
+
+---
+
+# MEDS Conversion
+
+We convert raw MIMIC-IV records into the standardized **Medical Event Data Standard (MEDS)** format.
+
+Official MEDS repository:
+- https://github.com/Medical-Event-Data-Standard
+
+Original MIMIC-IV MEDS extraction pipeline:
+- https://github.com/Medical-Event-Data-Standard/MIMIC_IV_MEDS
+
+Customized EHR-RAGp MEDS extraction pipeline:
+- https://github.com/nyuad-cai/MIMIC_IV_MEDS_EHRRAGP
+- Follow instructions prsent in the customized repository
 
 
-# MEDS Format
-We convert the raw EHR records into a standardized **event-oriented format** using publicly available tools based on the  [MedicalEvent Data Standard (MEDS)](https://github.com/Medical-Event-Data-Standard).  This conversion transforms the original tables into a consistent timeline representation, which serves as input for model training and evaluation. We leverage the official MEDS export tool available for MIMIC-IV V3.1, [MIMIC_IV_MEDS](https://github.com/Medical-Event-Data-Standard/MIMIC_IV_MEDS/tree/main/src/MIMIC_IV_MEDS)
+---
 
-# Preprocessing
-Upon MEDS extraction, the dataset needs to be processed and cleaned
+# Data Preprocessing
 
-```
+After MEDS conversion, run the end-to-end preprocessing pipeline:
+
+```bash
 python preprocess.py
 ```
 
-# Experiments
+The script performs the full post-MEDS preprocessing workflow, including:
 
-## Pretraining
+- copying the raw MEDS cohort into the local preprocessing workspace
+- cleaning raw MEDS shards
+- ICD-9 to ICD-10 diagnosis and procedure mapping
+- medication name normalization
+- microbiology event cleaning
+- laboratory event filtering, metadata enrichment, and value normalization
+- ICU event cleaning for chart, procedure, infusion, and fluid-output events
+- removal of patients without hospital admissions
+- removal of empty admissions
+- outpatient and emergency boundary construction
+- time-gap token insertion
+- MEDS-Transforms outlier occlusion
+- MEDS-Transforms numeric normalization
+- conversion of normalized parquet shards into a HuggingFace Arrow dataset
 
-To run pretraining experiments
-```
-python pretrain.py
-```
-## Baselines training (hyperparameters tuning)
+# Vector Index Setup
 
-To run hyperparameter experiments
+We use [Facebook AI Similarity Search (FAISS)](https://faiss.ai/index.html) to build vector indices. 
+
+Run 
+```bash
+python create_vdb_idx.py
 ```
-python wo_hparams_opt.py
+**Note:**
+
+The file is prepared to create vector indices for all chunking strategies. As we create single index per patienet stay (1 stay = 1 index.faiss file), each training example will have its own index. We recommedn using singularity overlay if indices creation is being performed on HPC to avoid exceeding file quota limits.
+# Pretraining
+
+We pretrain the encoder using Masked Language Modeling (MLM).
+
+Run pretraining:
+
+```bash
+export TOKENIZER_PATH="./resources/vocab.json"
+export DATA_PATH="./data/meds_arrow"
+export DATA_IDX_PATH="./resources/pretrain_idx.parquet"
+export LOG_DIR="./models/mlm"
+export VERSION="roformer"
+export PRETRAIN_MODE="mlm"
+export BACKBONE="roformer"
+export WANDB_API_KEY="YOUR_WANDB_API_KEY"
+torchrun --nproc_per_node=4 pretrain.py \
+    --learning-rate 2.2908676527677725e-05 \
+    --weight-decay 1e-2 \
+    --max-epochs 100 \
+    --batch-size 16 \
+    --chunk-length 1024 \
+    --overlap 128
 ```
 
-## EHR-RAGp training (hyperparameters tuning)
+**Main settings:**
+- Backbone: RoFormer-base
+- Context length: 1024
+- MLM masking ratio: 15%
+- Optimizer: AdamW
+- GPUs: 4× NVIDIA A100
 
-To run hyperparameter tuning experiments
-```
-python w_hparams_opt.py
+
+**Note:**
+The code is compatable with huggingface transformers models and can be used to pretrain other different encoder based backbones. below we provide our pretrained model checkpoints via masked language modeling for:
+
+<u>HuggingFace Models:</u>
+1. [RoFormer Checkpoint](https://github.com/nyuad-cai/EHR-RAGp/releases/download/v0.1-checkpoints/roformer-mlm-ehr.ckpt)
+2. [ModernBERT Checkpoint](https://github.com/nyuad-cai/EHR-RAGp/releases/download/v0.1-checkpoints/modernbert-mlm-ehr.ckpt)
+3. [Longformer Checkpoint](https://github.com/nyuad-cai/EHR-RAGp/releases/download/v0.1-checkpoints/longformer-mlm-ehr.ckpt)
+4. [BigBird Checkpoint](https://github.com/nyuad-cai/EHR-RAGp/releases/download/v0.1-checkpoints/bigbird-mlm-ehr.ckpt)
+5. [RoBERTa Checkpoint](https://github.com/nyuad-cai/EHR-RAGp/releases/download/v0.1-checkpoints/roberta-mlm-ehr.ckpt)
+6. [BERT Checkpoint](https://github.com/nyuad-cai/EHR-RAGp/releases/download/v0.1-checkpoints/bert-mlm-ehr.ckpt)
+
+
+<u>Clinical Foundation Models:</u>
+1. [MedBERT](https://github.com/nyuad-cai/EHR-RAGp/releases/download/v0.1-checkpoints/medbert-mlm-ehr.ckpt)
+1. [CEHR-BERT](https://github.com/nyuad-cai/EHR-RAGp/releases/download/v0.1-checkpoints/cehrbert-mlm-ehr.ckpt)
+1. [BEHRT](https://github.com/nyuad-cai/EHR-RAGp/releases/download/v0.1-checkpoints/behrt-mlm-ehr.ckpt)
+1. [HI-BEHRT](https://github.com/nyuad-cai/EHR-RAGp/releases/download/v0.1-checkpoints/hibehrt-mlm-ehr.ckpt)
+
+---
+
+# Baseline Training
+
+## Hyperparameter Optimization
+
+Run baseline tuning:
+
+```bash
+python wo_hparams_opt.py --config-path ./slurm/config/hparams/<task-name>/<baseline-name>.yaml 
 ```
 
-## Downstream evaluation
+Included baselines:
+- Med-BERT
+- BEHRT
+- CEHR-BERT
+- LongFormer
+- BigBird
+- RoFormer
+- ModernBERT
+- EHRMamba
+- REMed
 
-To run hyperparameter experiments
+---
+
+## final evaluation
+After completing hyperparameters tuning, run final evaluation using the best set of hyperparameters using
+
+```bash
+python final_eval.py --config-path ./slurm/config/eval/1<task-name>/<baseline-name>.yaml 
 ```
+
+# EHR-RAGp Training
+
+## Hyperparameter Optimization
+
+Run retrieval-augmented experiments:
+
+```bash
+python w_hparams_opt.py 
+```
+
+Key configurable components:
+- Chunking strategy
+- Number of prototypes
+- Retrieval depth
+- Prototype temperatures
+- Fusion module
+
+---
+
+# Evaluation
+
+Run downstream evaluation:
+
+```bash
 python final_eval.py
 ```
 
+Supported tasks:
+- In-hospital mortality
+- ICU readmission
+- Long length-of-stay
+- 1-year mortality
+
+Metrics:
+- AUROC
+- AUPRC
+- Bootstrap confidence intervals
+
+---
+
+# Results
+
+Main findings:
+- EHR-RAGp consistently outperforms transformer and EHR foundation baselines
+- Prototype-guided retrieval improves retrieval quality
+- Retrieval augmentation improves existing EHR foundation models
+
+---
+
+# Reproducibility Notes
+
+To ensure reproducibility:
+
+- All splits are patient-level
+- Test patients are excluded from pretraining
+- Random seeds are fixed
+- Hyperparameter search uses Bayesian optimization
+- Confidence intervals computed with bootstrapping
+
+Recommended seed:
+
+```python
+SEED = 24
+```
+
+---
+
+# Hardware Requirements
+
+Recommended:
+- NVIDIA H100 / A100 GPUs
+- ≥80GB GPU memory for full experiments
+
+Minimum:
+- Single high-memory GPU with reduced batch size
+
+Approximate training cost:
+- Pretraining: 4× A100 GPUs
+- Downstream training: 1× H100
+
+---
+
+# Configuration
+
+Example configuration:
+
+```yaml
+model:
+  backbone: roformer
+  hidden_dim: 768
+  prototypes: 512
+
+retrieval:
+  top_m: 24
+  chunk_size: 256
+
+training:
+  batch_size: 16
+  lr: 1e-4
+```
+
+---
+
 # Citation
 
-If you use our code, kindly cite our paper:
+```bibtex
+@article{shurrab2026ehrragp,
+  title={EHR-RAGp: Retrieval-Augmented Prototype-Guided Foundation Model for Electronic Health Records},
+  author={Shurrab, Saeed and Al-Omari, Mariam and El Samad, Dana and Shamout, Farah E.},
+  journal={arXiv preprint arXiv:2605.12335},
+  year={2026}
+}
 ```
-#TODO
-```
 
+---
 
+# Acknowledgements
 
+This work builds upon:
+- MIMIC-IV
+- MEDS ecosystem
+- PhysioNet
+- RoFormer
+- FAISS
 
-
-
-
+We thank the MEDS contributors and the Clinical AI Lab at NYU Abu Dhabi.

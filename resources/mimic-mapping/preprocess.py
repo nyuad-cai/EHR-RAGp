@@ -13,32 +13,25 @@ from src.data.utils import *
 from src.data.datasets import SequencesGenerator
 warnings.filterwarnings("ignore")
 
-# define data holding directories
-BASE_DIR = os.path.join(".", "data1")
-os.makedirs(BASE_DIR, exist_ok=True)
+BASE_DIR = "data1"
 
 RAW_DIR = os.path.join(BASE_DIR, "raw")
-os.makedirs(RAW_DIR, exist_ok=True)
-
 CLEANED_DIR = os.path.join(BASE_DIR, "cleaned")
-os.makedirs(CLEANED_DIR, exist_ok=True)
-
-CLEANED_DATA_DIR = os.path.join(CLEANED_DIR, "data", "train")
-os.makedirs(CLEANED_DATA_DIR, exist_ok=True)
-
-CLEANED_METADATA_DIR = os.path.join(CLEANED_DIR, "metadata")
-os.makedirs(CLEANED_METADATA_DIR, exist_ok=True)
-
 MED_PHASE1_DIR = os.path.join(BASE_DIR, "med_phase1")
-os.makedirs(MED_PHASE1_DIR, exist_ok=True)
-
 MED_PHASE2_DIR = os.path.join(BASE_DIR, "med_phase2")
-os.makedirs(MED_PHASE2_DIR, exist_ok=True)
-
 MEDS_ARROW_DIR = os.path.join(BASE_DIR, "meds_arrow")
-os.makedirs(MEDS_ARROW_DIR, exist_ok=True)
 
+DIRS = [
+    BASE_DIR,
+    RAW_DIR,
+    CLEANED_DIR,
+    MED_PHASE1_DIR,
+    MED_PHASE2_DIR,
+    MEDS_ARROW_DIR,
+]
 
+for directory in DIRS:
+    os.makedirs(directory, exist_ok=True)
 
 # enter the  raw dataset  extracted via MIMIC_IV_MEDS_EHRRAGP
 raw_meds_source = input("Enter path to raw MEDS dataset extracted via MIMIC_IV_MEDS_EHRRAGP, e.g. $ROOT_OUTPUT_DIR: ").strip()
@@ -54,19 +47,25 @@ dataset_name = raw_meds_source.rstrip("/").split("/")[-1]
 
 raw_dataset_root = os.path.join(RAW_DIR, dataset_name)
 
-resources_path = os.path.join('.','resources')
 raw_data_path = os.path.join(raw_dataset_root,"MEDS_cohort","data", "train",)
 raw_metadata_path = os.path.join(raw_dataset_root,"MEDS_cohort","metadata",)
-labs_metadata_path = os.path.join(resources_path,'mimic-mapping')
-icd_mapping_files_path = os.path.join(resources_path,'icd-code-conversion')
-medications_files_path = os.path.join(resources_path,'medications')
-labs_files_path = os.path.join(resources_path,'labs')
 
 
-shutil.copytree(raw_metadata_path, CLEANED_METADATA_DIR, dirs_exist_ok=True)
+
+labs_metadata_path = os.path.join('.','resources','mimic-mapping')
+labs_dimension_path = os.path.join('.','data','raw')
+
+icd_mapping_files_path = os.path.join('.','resources','icd-code-conversion')
+medications_files_path = os.path.join('.','resources','medications')
+labs_files_path = os.path.join('.','resources','labs')
+
+
+
 
 files = os.listdir(raw_data_path)
-completed_files = completed_files = os.listdir(CLEANED_DATA_DIR)
+# files = sorted(os.listdir(mimic_data_path))
+random.shuffle(files)
+completed_files = os.listdir(final_path)
 files = [file for file in files if file not in completed_files]
 
 for file in files:
@@ -86,7 +85,7 @@ for file in files:
         cleaned_medications = pd.read_csv(os.path.join(medications_files_path,'cleaned_medications.csv'))
 
         labs_metadata = pd.read_csv(os.path.join(labs_metadata_path,'d_labitems_to_loinc.csv'))
-        labs_dimension = pd.read_csv(os.path.join(labs_metadata_path,'d_labitems.csv')) 
+        labs_dimension = pd.read_csv(os.path.join(labs_dimension_path,'d_labitems.csv')) 
         cleaned_lab_values = pd.read_csv(os.path.join(labs_files_path,'lab_textual_mapping.csv'))
 
         icu_items_dimensions = pd.read_csv(os.path.join(labs_metadata_path,'d_items.csv'))
@@ -488,27 +487,24 @@ for file in files:
             all_patients.append(patient)
             
         shard = pd.concat(all_patients,ignore_index=True)
-        shard.to_parquet(os.path.join(CLEANED_DATA_DIR, file), index=False)
+        shard.to_parquet(os.path.join(final_path, file), index=False)
 
-print('Finished all cleaning steps, starting with meds transformation')
+    print('Finished all processing')
 
 
 
-empty_dir(MED_PHASE1_DIR)
-phase1_config["input_dir"] = CLEANED_DIR
-phase1_config["output_dir"] = MED_PHASE1_DIR
+phase1_config["input_dir"] = None # create directory and set its path instead of None
+phase1_config["output_dir"] = None # create directory and set its path instead of None
+
+phase2_config["input_dir"] = None # create directory and set its path instead of None
+phase2_config["output_dir"] = None # create directory and set its path instead of None
+
+
 run_meds_transform_from_dict(phase1_config)
-
-
-
-empty_dir(MED_PHASE2_DIR)
-phase2_config["input_dir"] = MED_PHASE1_DIR
-phase2_config["output_dir"] = MED_PHASE2_DIR
 run_meds_transform_from_dict(phase2_config)
 
 
-
-seq_gen = SequencesGenerator(tokenizer_path=os.path.join(resources_path,'vocab.json'),
+seq_gen = SequencesGenerator(tokenizer_path='../vocab.json',
                              chunk_length=1024, # this is just set for the API correctness, full sequnece will be encoded
                              overlap=128, # this is just set for the API correctness, full sequnece will be encoded
                              return_numeric=True,
@@ -517,9 +513,9 @@ seq_gen = SequencesGenerator(tokenizer_path=os.path.join(resources_path,'vocab.j
                              return_ids=True,)
 
 
-build_arrow_dataset(data_idx_fp=os.path.join(resources_path,"data_idx_full.parquet"),
-                    normalized_train_dir=os.path.join(MED_PHASE2_DIR, "data", "train"),
-                    output_dir= MEDS_ARROW_DIR,
+build_arrow_dataset(data_idx_fp="./data_idx_full.parquet",
+                    normalized_train_dir="./data/meds_normalized/data/train",
+                    output_dir="./data/ehr_arrow_dataset",
                     seq_gen=seq_gen)
 
 
