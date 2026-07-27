@@ -23,12 +23,58 @@ We conduct all experiments using [**MIMIC-IV**](https://physionet.org/content/mi
 # MEDS Format
 We convert the raw EHR records into a standardized **event-oriented format** using publicly available tools based on the  [MedicalEvent Data Standard (MEDS)](https://github.com/Medical-Event-Data-Standard).  This conversion transforms the original tables into a consistent timeline representation, which serves as input for model training and evaluation. We leverage the official MEDS export tool available for MIMIC-IV V3.1, [MIMIC_IV_MEDS](https://github.com/Medical-Event-Data-Standard/MIMIC_IV_MEDS/tree/main/src/MIMIC_IV_MEDS)
 
-# Preprocessing
-Upon MEDS extraction, the dataset needs to be processed and cleaned
+Official MEDS repository:
 
-```
+https://github.com/Medical-Event-Data-Standard
+
+Original MIMIC-IV MEDS extraction pipeline:
+
+https://github.com/Medical-Event-Data-Standard/MIMIC_IV_MEDS
+
+Customized EHR-RAGp MEDS extraction pipeline:
+
+https://anonymous.4open.science/r/MIMIC_IV_MEDS_EHRRAGP-ECBC
+
+Follow the instructions present in the customized repository
+
+
+# Data Preprocessing
+
+After MEDS conversion, run the end-to-end preprocessing pipeline:
+
+```bash
 python preprocess.py
 ```
+
+The script performs the full post-MEDS preprocessing workflow, including:
+
+- copying the raw MEDS cohort into the local preprocessing workspace
+- cleaning raw MEDS shards
+- ICD-9 to ICD-10 diagnosis and procedure mapping
+- medication name normalization
+- microbiology event cleaning
+- laboratory event filtering, metadata enrichment, and value normalization
+- ICU event cleaning for chart, procedure, infusion, and fluid-output events
+- removal of patients without hospital admissions
+- removal of empty admissions
+- outpatient and emergency boundary construction
+- time-gap token insertion
+- MEDS-Transforms outlier occlusion
+- MEDS-Transforms numeric normalization
+- conversion of normalized parquet shards into a HuggingFace Arrow dataset
+
+# Vector Index Setup
+
+We use [Facebook AI Similarity Search (FAISS)](https://faiss.ai/index.html) to build vector indices. 
+
+Run 
+```bash
+python create_vdb_idx.py
+```
+**Note:**
+
+The file is prepared to create vector indices for all chunking strategies. As we create single index per patienet stay (1 stay = 1 index.faiss file), each training example will have its own index. We recommedn using singularity overlay if indices creation is being performed on HPC to avoid exceeding file quota limits.
+
 
 # Experiments
 
