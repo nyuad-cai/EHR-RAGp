@@ -14,3 +14,6 @@ vdb/
 figures
 overlay-51200M-1000K.ext3
 overlay-512000M-15000K.ext3
+ehrshot_clmbr_tokenized_arrow
+faiss_clmbr/
+significance/

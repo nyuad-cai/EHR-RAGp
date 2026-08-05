@@ -1,5 +1,6 @@
 import os
 import yaml
+import torch
 import shutil
 import tempfile
 import subprocess
@@ -11,7 +12,7 @@ import polars as pl
 from tqdm import tqdm
 from pathlib import Path
 from datetime import time, timedelta
-
+from typing import Any, List, Dict, Union, Optional, Mapping 
 
 
 def read_gem_file(gems_path:str, icd9_list_path:str, icd10_list_path: str)-> pd.DataFrame: 
@@ -685,3 +686,43 @@ def empty_dir(path):
             shutil.rmtree(item)
         else:
             item.unlink()
+
+
+
+
+def pack_clmbr_chunks(
+    chunks: List[Dict[str, List[Any]]],
+    patient_id: int = 0,
+) -> Dict[str, Any]:
+
+    if len(chunks) == 0:
+        raise ValueError("Cannot pack empty chunk list.")
+
+    lengths = [len(c["tokens"]) for c in chunks]
+
+    if any(length == 0 for length in lengths):
+        raise ValueError("Empty CLMBR chunk found.")
+
+    total_len = sum(lengths)
+
+    def flatten(key):
+        return sum([list(c[key]) for c in chunks], [])
+
+    return {
+        "num_patients": len(chunks),
+        "num_indices": 0,
+        "patient_ids": torch.tensor(
+            [patient_id] * total_len,
+            dtype=torch.long,
+        ),
+        "offsets": torch.zeros(len(chunks), dtype=torch.int32),
+        "transformer": {
+            "tokens": torch.tensor(flatten("tokens"), dtype=torch.long),
+            "valid_tokens": torch.tensor(flatten("valid_tokens"), dtype=torch.bool),
+            "ages": torch.tensor(flatten("ages"), dtype=torch.float32),
+            "normalized_ages": torch.tensor(flatten("normalized_ages"), dtype=torch.float16),
+            "timestamps": torch.tensor(flatten("timestamps"), dtype=torch.long),
+            "patient_lengths": torch.tensor(lengths, dtype=torch.int32),
+            "label_indices": torch.tensor([], dtype=torch.int32),
+        },
+    }

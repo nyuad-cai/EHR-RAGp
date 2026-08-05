@@ -3,6 +3,7 @@ import os
 import json
 import torch
 import faiss
+import femr
 import numpy as np
 import polars as pl
 
@@ -12,10 +13,75 @@ from datasets import load_from_disk
 from collections import defaultdict
 from ..models.models import EHREmbeddings
 from ..data.datasets import SequencesGenerator
-from typing import List, Dict, Union, Optional
+from typing import Any, List, Dict, Union, Optional, Mapping 
 from ..models.utils import get_config_and_model_cls
 from .utils import build_index, to_list, build_faiss_index
 from chromadb.api.types import Documents, Embeddings, EmbeddingFunction
+from ..data.utils import pack_clmbr_chunks
+
+
+
+
+
+
+
+class CLMBREmbedder(nn.Module):
+    def __init__(
+        self,
+        model: nn.Module,
+        batch_processor=None,
+        normalize: bool = False,
+        device: Optional[str] = None,
+    ):
+        super().__init__()
+
+        self.model = model
+        self.batch_processor = batch_processor
+        self.normalize = normalize
+        self.device_ = device or ("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.model.eval().to(self.device_)
+
+    @torch.no_grad()
+    def encode(self, raw_batch: Mapping[str, Any]) -> torch.Tensor:
+        if self.batch_processor is not None:
+            batch = self.batch_processor.collate([raw_batch])["batch"]
+            batch = femr.models.transformer.remove_first_dimension(batch)
+        else:
+            batch = raw_batch
+
+        transformer_batch = self._move_transformer_to_device(batch["transformer"])
+
+        reprs = self.model.transformer(transformer_batch)
+
+        patient_lengths = torch.as_tensor(
+            transformer_batch["patient_lengths"],
+            dtype=torch.long,
+            device=reprs.device,
+        )
+
+        end_positions = torch.cumsum(patient_lengths, dim=0) - 1
+        embs = reprs[end_positions]
+
+        if self.normalize:
+            embs = nn.functional.normalize(embs, p=2, dim=-1)
+
+        return embs
+
+    def _move_transformer_to_device(
+        self,
+        transformer_batch: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        out = {}
+
+        for k, v in transformer_batch.items():
+            if torch.is_tensor(v):
+                out[k] = v.to(self.device_)
+            else:
+                out[k] = torch.as_tensor(v).to(self.device_)
+
+        return out
+
 
 
 
@@ -545,3 +611,94 @@ def build_indices(data_idx_path:str,
 
         idx, _ = build_faiss_index(ch_embs=ch_emb, metric='cosine')
         faiss.write_index(idx, os.path.join(save_path,f"{stay_id}.faiss"))
+
+
+
+
+
+
+def build_clmbr_indices(
+    data_idx_path: str,
+    arrow_dataset_path: str,
+    task: str,
+    save_path: str,
+    model,
+    batch_processor,
+    query_length: int = 512,
+    history_chunk_length: int = 256,
+    history_overlap: int = 0,
+    chunking_strategy: str = "overlap",
+    window_hours: float = 6.0,
+):
+
+    assert chunking_strategy in ["overlap", "time"]
+
+#     os.makedirs(save_path, exist_ok=True)
+
+    arrow_ds = load_from_disk(arrow_dataset_path)
+    data_idx = pl.read_parquet(data_idx_path)
+    data_idx = data_idx.filter(pl.col('task') == task)
+
+    seq_gen = SequencesGenerator(
+        tokenizer_path=None,
+        chunk_length=history_chunk_length,
+        overlap=history_overlap,
+        dataset_name="ehrshot")
+
+    embedder = CLMBREmbedder(model=model, batch_processor=batch_processor, normalize=False)
+
+    for row_i in tqdm(range(len(data_idx))):
+        row = data_idx[row_i]
+        subject_id = int(row["subject_id"][0])
+        example_id = int(row["example_id"][0])
+        arrow_row_idx = int(row["arrow_row_idx"][0])
+        prediction_idx = int(row["prediction_idx"][0])
+        history_min_idx = int(row["history_min_idx"][0])
+        sample = arrow_ds[arrow_row_idx]
+        tr = sample["transformer"]
+
+        timeline = {
+            "tokens": to_list(tr["tokens"]),
+            "valid_tokens": to_list(tr["valid_tokens"]),
+            "ages": to_list(tr["ages"]),
+            "normalized_ages": to_list(tr["normalized_ages"]),
+            "timestamps": to_list(tr["timestamps"]),
+            "patient_lengths": to_list(tr["patient_lengths"]),
+            "label_indices": to_list(tr["label_indices"])}
+
+        query_start = max(history_min_idx, prediction_idx - query_length)
+        query_end = prediction_idx
+
+        query = {k: v[query_start:query_end] for k, v in timeline.items() if isinstance(v, list)}
+
+        query["patient_lengths"] = [len(query["tokens"])]
+        query["label_indices"] = []
+
+        query_batch = pack_clmbr_chunks([query])
+        q_emb = embedder.encode(query_batch)
+
+        history_start = history_min_idx
+        history_end = query_start
+
+        history = {k: v[history_start:history_end] for k, v in timeline.items() if isinstance(v, list)}
+
+        history_chunks = []
+
+        if len(history["tokens"]) > 0:
+            if chunking_strategy == "overlap":
+                history_chunks = seq_gen.get_overlapped_chunks(timeline=history, add_cls_per_chunk=False)
+
+            elif chunking_strategy == "time":
+                history_chunks = seq_gen.get_time_based_chunks(timeline=history, window_hours=window_hours)
+
+        if len(history_chunks) > 0:
+            history_batch = pack_clmbr_chunks(history_chunks)
+            h_emb = embedder.encode(history_batch)
+            all_embs = torch.cat([h_emb, q_emb], dim=0)
+
+        else:
+            all_embs = q_emb
+
+        index, _ = build_faiss_index(ch_embs=all_embs,metric="cosine")
+        faiss_name = f"{subject_id}_{example_id}.faiss"
+        faiss.write_index(index,os.path.join(save_path, faiss_name))

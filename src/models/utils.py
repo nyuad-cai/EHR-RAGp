@@ -2,6 +2,7 @@
 
 import os
 import yaml
+import json
 import torch
 import wandb
 import polars as pl
@@ -14,7 +15,13 @@ from transformers import BertConfig
 from torchmetrics.classification import BinaryAUROC, BinaryAveragePrecision
 from transformers import CONFIG_MAPPING, MODEL_FOR_MASKED_LM_MAPPING, MODEL_MAPPING, MODEL_FOR_CAUSAL_LM_MAPPING
 
-
+def correct_tokenizer_dict(dict_fp:str):
+    with open(dict_fp) as f:
+        old_dictionary = json.load(f)
+    dictionary = {"age_stats": old_dictionary["age_stats"],
+                  "is_hierarchical": old_dictionary.get("is_hierarchical", False),
+                  "vocab": old_dictionary["regular"]}
+    return dictionary
 
 
 BERT_VARIANTS = {

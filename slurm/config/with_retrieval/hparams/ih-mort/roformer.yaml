@@ -10,8 +10,8 @@ model:
 
 dataset:
   data_path: /scratch/sas10092/ehr-foundation/data/meds_normalized_arrow
-  data_idx_path: /scratch/sas10092/ehr-foundation/downstream_idx.parquet
-  tokenizer_path: /scratch/sas10092/ehr-foundation/vocab.json
+  data_idx_path: /scratch/sas10092/ehr-foundation/resources/downstream_idx.parquet
+  tokenizer_path: /scratch/sas10092/ehr-foundation/resources/vocab.json
   main_window_query: within48_query
   main_window_history: within48_hist_full
   task: y_mort

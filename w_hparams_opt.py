@@ -4,19 +4,19 @@ import wandb
 import shutil
 import optuna
 import argparse
-
+import femr.models.transformer
+import femr.models.tokenizer
 
 import lightning.pytorch as lt
 
 from optuna.samplers import TPESampler
 from torch.utils.data import DataLoader
-from src.models.models import EHRRAPEvalModel
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.utilities import rank_zero_only
-from src.data.datasets import limits, RetrievalDataset, EvalCollator, RetrievalCollator
+from src.models.models import EHRRAPEvalModel, CLMBRRAPEvalModel
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
-from src.models.utils import get_config_and_model_cls, fix_roberta_longformer_max_pos, load_config_with_env
-
+from src.models.utils import get_config_and_model_cls, fix_roberta_longformer_max_pos, load_config_with_env, correct_tokenizer_dict
+from src.data.datasets import limits, RetrievalDataset, EvalCollator, RetrievalCollator, CLMBRRetrievalDataset, CLMBRRetrievalCollator
 
 
 
@@ -27,7 +27,7 @@ parser.add_argument('--config-path', type=str, required=True)
 parser.add_argument('--chunking-strategy', type=str, default='overlap', choices=['overlap','time','visit','care_stage'])
 parser.add_argument('--span', type=str, default='6.0', choices=['6.0','12.0','24.0','256','512','1024'])
 parser.add_argument('--use-prototypes', action='store_true')
-
+parser.add_argument('--benchmark', type=str, default='mimic', choices=['mimic','ehrshot'])
 
 args = parser.parse_args()
 config = load_config_with_env(args.config_path)
@@ -54,8 +54,8 @@ def get_gpu_name():
     else:
         raise RuntimeError("No GPU available")
 
-gpu_bs = {256:{'NVIDIA A100 80GB PCIe': 12 ,
-               'NVIDIA A100-SXM4-80GB':12,
+gpu_bs = {256:{'NVIDIA A100 80GB PCIe': 12,
+               'NVIDIA A100-SXM4-80GB':12 ,
                'NVIDIA H100 NVL': 16,
                'NVIDIA H200':20
                },
@@ -75,7 +75,7 @@ def objective(trial: optuna.trial.Trial) -> float:
     
     try:
         # training
-        learning_rate =trial.suggest_float("learning_rate", 1e-5, 5e-4, log=True)
+        learning_rate =trial.suggest_float("learning_rate",  1e-5, 5e-4, log=True)
         weight_decay =trial.suggest_float("weight_decay", 1e-3, 1e-2, log=True)
         # model
         pooling_enc =trial.suggest_categorical("pooling_enc",['cls','mean'])
@@ -91,7 +91,7 @@ def objective(trial: optuna.trial.Trial) -> float:
         else:
             usage_lambda = 0.0
             use_augmentation = False
-            proto_temperature = 1.0
+            proto_temperature = [1.0,1.0]
             softmax_temperature=0
             num_prototypes = 1
             prot_status = "without_proto"
@@ -160,67 +160,201 @@ def objective(trial: optuna.trial.Trial) -> float:
         elif config['dataset']['task'] in ['y_mort_1yr','y_icu_readmit_30']:
             window = 'wstay'
 
-        train_dataset = RetrievalDataset(data_idx_path=config['dataset']['data_idx_path'],
-                                         dataset_path= config['dataset']['data_path'],
-                                         vectordb_path=f"/faiss/{config['dataset']['seq_length_q']}/{args.chunking_strategy}/{span_dir}/{window}",
-                                         tokenizer_path=config['dataset']['tokenizer_path'],
-                                         limits_dict=limits,
-                                         chunking_strategy= args.chunking_strategy,
-                                         task= config['dataset']['task'],
-                                         query_window=config['dataset']['main_window_query'],
-                                         history_window=config['dataset']['main_window_history'],
-                                         top_k=top_k,
-                                         seq_length_q = config['dataset']['seq_length_q'],
-                                         overlap_q= config['dataset']['overlap_q'],
-                                         seq_length_h= seq_length_h,
-                                         overlap_h=overlap_h,
-                                         use_time= True,
-                                         use_numeric= True,
-                                         add_cls=True,
-                                         window_hours= window_hours,
-                                         split= 'train')
-        
-        val_dataset = RetrievalDataset(data_idx_path=config['dataset']['data_idx_path'],
-                                         dataset_path= config['dataset']['data_path'],
-                                         vectordb_path=f"/faiss/{config['dataset']['seq_length_q']}/{args.chunking_strategy}/{span_dir}/{window}",
-                                         tokenizer_path=config['dataset']['tokenizer_path'],
-                                         limits_dict=limits,
-                                         chunking_strategy= args.chunking_strategy,
-                                         task= config['dataset']['task'],
-                                         query_window=config['dataset']['main_window_query'],
-                                         history_window=config['dataset']['main_window_history'],
-                                         top_k=top_k,
-                                         seq_length_q = config['dataset']['seq_length_q'],
-                                         overlap_q= config['dataset']['overlap_q'],
-                                         seq_length_h= seq_length_h,
-                                         overlap_h=overlap_h,
-                                         use_time= True,
-                                         use_numeric= True,
-                                         add_cls=True,
-                                         window_hours= window_hours,
-                                         split= 'val')
-        
+        if args.benchmark == "mimic":
+            train_dataset = RetrievalDataset(data_idx_path=config['dataset']['data_idx_path'],
+                                            dataset_path= config['dataset']['data_path'],
+                                            vectordb_path=f"/faiss/{config['dataset']['seq_length_q']}/{args.chunking_strategy}/{span_dir}/{window}",
+                                            tokenizer_path=config['dataset']['tokenizer_path'],
+                                            limits_dict=limits,
+                                            chunking_strategy= args.chunking_strategy,
+                                            task= config['dataset']['task'],
+                                            query_window=config['dataset']['main_window_query'],
+                                            history_window=config['dataset']['main_window_history'],
+                                            top_k=top_k,
+                                            seq_length_q = config['dataset']['seq_length_q'],
+                                            overlap_q= config['dataset']['overlap_q'],
+                                            seq_length_h= seq_length_h,
+                                            overlap_h=overlap_h,
+                                            use_time= True,
+                                            use_numeric= True,
+                                            add_cls=True,
+                                            window_hours= window_hours,
+                                            uniform_retrieval=True,
+                                            split= 'train')
+            
+            val_dataset = RetrievalDataset(data_idx_path=config['dataset']['data_idx_path'],
+                                            dataset_path= config['dataset']['data_path'],
+                                            vectordb_path=f"/faiss/{config['dataset']['seq_length_q']}/{args.chunking_strategy}/{span_dir}/{window}",
+                                            tokenizer_path=config['dataset']['tokenizer_path'],
+                                            limits_dict=limits,
+                                            chunking_strategy= args.chunking_strategy,
+                                            task= config['dataset']['task'],
+                                            query_window=config['dataset']['main_window_query'],
+                                            history_window=config['dataset']['main_window_history'],
+                                            top_k=top_k,
+                                            seq_length_q = config['dataset']['seq_length_q'],
+                                            overlap_q= config['dataset']['overlap_q'],
+                                            seq_length_h= seq_length_h,
+                                            overlap_h=overlap_h,
+                                            use_time= True,
+                                            use_numeric= True,
+                                            add_cls=True,
+                                            window_hours= window_hours,
+                                            uniform_retrieval=True,
+                                            split= 'val')
 
+            test_dataset = RetrievalDataset(data_idx_path=config['dataset']['data_idx_path'],
+                                            dataset_path= config['dataset']['data_path'],
+                                            vectordb_path=f"/faiss/{config['dataset']['seq_length_q']}/{args.chunking_strategy}/{span_dir}/{window}",
+                                            tokenizer_path=config['dataset']['tokenizer_path'],
+                                            limits_dict=limits,
+                                            chunking_strategy= args.chunking_strategy,
+                                            task= config['dataset']['task'],
+                                            query_window=config['dataset']['main_window_query'],
+                                            history_window=config['dataset']['main_window_history'],
+                                            top_k=top_k,
+                                            seq_length_q = config['dataset']['seq_length_q'],
+                                            overlap_q= config['dataset']['overlap_q'],
+                                            seq_length_h= seq_length_h,
+                                            overlap_h=overlap_h,
+                                            use_time= True,
+                                            use_numeric= True,
+                                            add_cls=True,
+                                            window_hours= window_hours,
+                                            uniform_retrieval=True,
+                                            split= 'test')
         
+            chunk_collator = EvalCollator(tokenizer=train_dataset.query_gen.tokenizer,
+                                        use_mask_augmentation= True if use_augmentation == 1 else False,
+                                        augment_prob=0.25,
+                                        mask_prob=0.125,
+                                        )
+            retrieval_collator = RetrievalCollator(chunk_collator=chunk_collator, top_k=top_k)
 
-        chunk_collator = EvalCollator(tokenizer=train_dataset.query_gen.tokenizer,
-                                      use_mask_augmentation= True if use_augmentation == 1 else False,
-                                      augment_prob=0.25,
-                                      mask_prob=0.125,
+            ConfigClass, ModelClass = get_config_and_model_cls(model_type=config['backbone_name'], mode='eval', variant=config.get('variant', None))
+
+            cfg = ConfigClass(vocab_size=train_dataset.query_gen.tokenizer.vocab_size,
+                              cls_token_id=train_dataset.query_gen.tokenizer.cls_id,
+                              pad_token_id=train_dataset.query_gen.tokenizer.pad_id,
+                              type_vocab_size=28,
+                              visit_vocab_size=102,
+                              stage_vocab_size=5,
+                              refernece_compile=False)
+            
+            cfg = fix_roberta_longformer_max_pos(cfg)
+
+
+            model = EHRRAPEvalModel(config=cfg,
+                                    backbone=ModelClass,
+                                    ckpt_path=config['model']['ckpt_path'],
+                                    lr=learning_rate,
+                                    wd=weight_decay,
+                                    max_epochs=100,
+                                    dropout=0.1,
+                                    freeze=False,
+                                    pooling=pooling_enc,
+                                    use_numeric=True,
+                                    use_time=True,
+                                    # prototype module
+                                    num_prototypes=num_prototypes,
+                                    query_temperature=proto_temperature[0],
+                                    history_temperature=proto_temperature[1],
+                                    normalize_prototypes=True,
+                                    softmax_threshold=softmax_threshold,             
+                                    softmax_temperature=softmax_temperature,             
+                                    sample_ent_lambda=0.0,
+                                    usage_ent_lambda=usage_lambda,
+                                    use_prototypes=args.use_prototypes,
+                                    # fusion
+                                    fusion_layers=2,
+                                    fusion_heads=4,
+                                    fusion_ff_mult=4,
+                                    fusion_output_mode=pooling_fuse,
+                                    use_weights_as_gating=True)
+            
+        elif args.benchmark == "ehrshot": 
+            train_dataset =  CLMBRRetrievalDataset(dataset_path=config['dataset']['data_path'],
+                                                    data_idx_path=config['dataset']['data_idx_path'],
+                                                    vectordb_path=f"./data/faiss_clmbr/{config['dataset']['seq_length_q']}/{args.chunking_strategy}/{span_dir}/{task}",
+                                                    task=task,
+                                                    split="train",
+                                                    top_k=top_k,
+                                                    query_length=config['dataset']['seq_length_q'],
+                                                    history_chunk_length=seq_length_h,
+                                                    history_overlap=overlap_h,
+                                                    chunking_strategy=args.chunking_strategy)
+
+            val_dataset =  CLMBRRetrievalDataset(dataset_path=config['dataset']['data_path'],
+                                                 data_idx_path=config['dataset']['data_idx_path'],
+                                                 vectordb_path=f"./data/faiss_clmbr/{config['dataset']['seq_length_q']}/{args.chunking_strategy}/{span_dir}/{task}",
+                                                 task=task,
+                                                 split="val",
+                                                 top_k=top_k,
+                                                 query_length=config['dataset']['seq_length_q'],
+                                                 history_chunk_length=seq_length_h,
+                                                 history_overlap=overlap_h,
+                                                 chunking_strategy=args.chunking_strategy)
+
+            test_dataset =  CLMBRRetrievalDataset(dataset_path=config['dataset']['data_path'],
+                                                  data_idx_path=config['dataset']['data_idx_path'],
+                                                  vectordb_path=f"./data/faiss_clmbr/{config['dataset']['seq_length_q']}/{args.chunking_strategy}/{span_dir}/{task}",
+                                                  task=task,
+                                                  split="test",
+                                                  top_k=top_k,
+                                                  query_length=config['dataset']['seq_length_q'],
+                                                  history_chunk_length=seq_length_h,
+                                                  history_overlap=overlap_h,
+                                                  chunking_strategy=args.chunking_strategy)
+            
+            retrieval_collator = CLMBRRetrievalCollator(top_k=top_k)
+
+            dict_path = config['dataset']['tokenizer_path']
+            dictionary = correct_tokenizer_dict(dict_path)
+            model_name = config['model']['model_name']
+            clmbr_model = femr.models.transformer.FEMRModel.from_pretrained(model_name)
+            for p in clmbr_model.parameters():
+                p.requires_grad = True
+            tokenizer = femr.models.tokenizer.FEMRTokenizer(dictionary=dictionary,ontology=None)
+            # batch_processor = femr.models.processor.FEMRBatchProcessor(tokenizer)
+
+            model = CLMBRRAPEvalModel(clmbr_model=clmbr_model,
+                                        batch_processor=None,
+                                        hidden_size= 768,
+                                        lr= learning_rate,
+                                        wd=weight_decay,
+                                        max_epochs= 100,
+                                        dropout=0.1,
+                                        freeze=False,
+                                        # --- prototype module ---
+                                        num_prototypes=num_prototypes,
+                                        query_temperature= proto_temperature[0],
+                                        history_temperature=proto_temperature[1],
+                                        normalize_prototypes= True,
+                                        softmax_threshold= softmax_threshold,
+                                        softmax_temperature=softmax_temperature,
+                                        sample_ent_lambda=0,
+                                        usage_ent_lambda= usage_lambda,
+                                        use_prototypes= args.use_prototypes,
+                                        # --- fusion module ---
+                                        fusion_layers= 2,
+                                        fusion_heads= 4,
+                                        fusion_ff_mult= 4,
+                                        fusion_output_mode= pooling_fuse,
+                                        use_weights_as_gating= True,
                                       )
-        retrieval_collator = RetrievalCollator(chunk_collator=chunk_collator, top_k=top_k)
+            config['dataset']['task'] = task
 
         train_dataloader = DataLoader(dataset=train_dataset,
-                                    batch_size=batch_size,
-                                    shuffle=True,
-                                    collate_fn=retrieval_collator,
-                                    num_workers=4,
-                                    prefetch_factor=2,
-                                    persistent_workers=True,
-                                    pin_memory=True,
-                                    pin_memory_device='cuda',
-                                    drop_last=True,
-                                    ) 
+                                      batch_size=batch_size,
+                                      shuffle=True,
+                                      collate_fn=retrieval_collator,
+                                      num_workers=4,
+                                      prefetch_factor=2,
+                                      persistent_workers=True,
+                                      pin_memory=True,
+                                      pin_memory_device='cuda',
+                                      drop_last=False,
+                                      ) 
         
         val_dataloader = DataLoader(dataset=val_dataset,
                                     batch_size=batch_size,
@@ -231,67 +365,33 @@ def objective(trial: optuna.trial.Trial) -> float:
                                     persistent_workers=True,
                                     pin_memory=True,
                                     pin_memory_device='cuda',
-                                    drop_last=True,
+                                    drop_last=False,
+                                    )
+
+
+        test_dataloader = DataLoader(dataset=test_dataset,
+                                    batch_size=batch_size,
+                                    shuffle=True,
+                                    collate_fn=retrieval_collator,
+                                    num_workers=4,
+                                    prefetch_factor=2,
+                                    persistent_workers=True,
+                                    pin_memory=True,
+                                    pin_memory_device='cuda',
+                                    drop_last=False,
                                     ) 
  
-
-        ConfigClass, ModelClass = get_config_and_model_cls(model_type=config['backbone_name'], mode='eval', variant=config.get('variant', None))
-
-        cfg = ConfigClass(vocab_size=train_dataset.query_gen.tokenizer.vocab_size,
-                          cls_token_id=train_dataset.query_gen.tokenizer.cls_id,
-                          pad_token_id=train_dataset.query_gen.tokenizer.pad_id,
-                          type_vocab_size=28,
-                          visit_vocab_size=102,
-                          stage_vocab_size=5,
-                          refernece_compile=False)
-        
-        cfg = fix_roberta_longformer_max_pos(cfg)
-
-
-        model = EHRRAPEvalModel(config=cfg,
-                                backbone=ModelClass,
-                                ckpt_path=config['model']['ckpt_path'],
-                                lr=learning_rate,
-                                wd=weight_decay,
-                                max_epochs=100,
-                                dropout=0.1,
-                                freeze=False,
-                                pooling=pooling_enc,
-                                use_numeric=True,
-                                use_time=True,
-
-                                # prototype module
-                                num_prototypes=num_prototypes,
-                                query_temperature=proto_temperature[0],
-                                history_temperature=proto_temperature[1],
-                                normalize_prototypes=True,
-
-                                softmax_threshold=softmax_threshold,             
-                                softmax_temperature=softmax_temperature,             
-                                sample_ent_lambda=0.0,
-                                usage_ent_lambda=usage_lambda,
-                                use_prototypes=True,
-
-                                # fusion
-                                fusion_layers=2,
-                                fusion_heads=4,
-                                fusion_ff_mult=4,
-                                fusion_output_mode=pooling_fuse,
-                                use_weights_as_gating=True)
-
-
-
                 
         wandb.login(key=config['logger']['wandb_api_key'])
         
         if config.get('variant') is not None:
             version = f"{config['backbone_name']}_{config['variant']}_{config['job_id']}_{config['dataset']['task']}_{args.chunking_strategy}_{span_dir}_{prot_status}_{trial.number}"
             name = f"{config['backbone_name']}_{config['variant']}_{config['job_id']}_{config['dataset']['task']}_{args.chunking_strategy}_{span_dir}_{prot_status}_{trial.number}"
-            tags = [config['version'],config['dataset']['task'],config['backbone_name'],'hparams_opt',args.chunking_strategy, config["variant"],'existing-fm']
+            tags = [config['version'],config['dataset']['task'],config['backbone_name'],'hparams_opt',args.chunking_strategy, config["variant"],'existing-fm','random']
         else:
             version = f"{config['backbone_name']}_{config['job_id']}_{config['dataset']['task']}_{args.chunking_strategy}_{span_dir}_{prot_status}_{trial.number}"
             name = f"{config['backbone_name']}_{config['job_id']}_{config['dataset']['task']}_{args.chunking_strategy}_{span_dir}_{prot_status}_{trial.number}"
-            tags = [config['version'],config['dataset']['task'],config['backbone_name'],'hparams_opt',args.chunking_strategy]
+            tags = [config['version'],config['dataset']['task'],config['backbone_name'],'hparams_opt',args.chunking_strategy,'random']
 
         wandb_logger = WandbLogger(project='MedEHR_Eval',
                                 entity=config['logger']['entity'],
@@ -305,15 +405,15 @@ def objective(trial: optuna.trial.Trial) -> float:
         make_dir(ckpt_dir)
         
         checkpoint_callback = ModelCheckpoint(dirpath=ckpt_dir,
-                                                monitor='val_loss',
-                                                mode='min',
+                                                monitor='val_auroc',
+                                                mode='max',
                                                 every_n_epochs=1,
                                                 save_top_k=1)
 
-        early_stop = EarlyStopping(monitor='val_loss',
+        early_stop = EarlyStopping(monitor='val_auroc',
                                    min_delta=0.001,
-                                   mode='min', 
-                                   patience=6)
+                                   mode='max', 
+                                   patience=4)
 
         lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
@@ -338,6 +438,14 @@ def objective(trial: optuna.trial.Trial) -> float:
 
         trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
 
+        best_ckpt = checkpoint_callback.best_model_path
+        print("Using best ckpt:", best_ckpt)
+        print("Best val score:", checkpoint_callback.best_model_score)
+
+        assert best_ckpt and os.path.exists(best_ckpt)
+
+        trainer.test(model=model, dataloaders=test_dataloader, ckpt_path=best_ckpt)
+
         # shutil.rmtree(ckpt_dir, ignore_errors=True)
 
     except optuna.exceptions.TrialPruned:
@@ -346,26 +454,32 @@ def objective(trial: optuna.trial.Trial) -> float:
     finally:
         wandb.finish()
 
-    return early_stop.best_score.item()
+    return checkpoint_callback.best_model_score.item()
 
 def main():
     pruner = optuna.pruners.NopPruner() 
     prot_status = "with_proto" if args.use_prototypes else "without_proto"
+
+    if config['backbone_name'] == 'clmbr':
+        config['dataset']['task'] = os.getenv('TASK')
     
     if config.get('variant') is not None:
-        db_path = f'sqlite:////scratch/sas10092/ehr-foundation/models/optuna_dbs/with_retrieval/{config["backbone_name"]}_{config["variant"]}_{prot_status}_{config["dataset"]["task"]}_{args.span}_{args.chunking_strategy}.db'
+        db_path = f'sqlite:////scratch/sas10092/ehr-foundation/models/optuna_dbs/{config["backbone_name"]}_{config["variant"]}_{prot_status}_{config["dataset"]["task"]}_{args.span}_{args.chunking_strategy}.db'
+        # db_path = f'sqlite:////scratch/sas10092/ehr-foundation/models/optuna_dbs/2_{config["backbone_name"]}_{config["variant"]}_{prot_status}_{config["dataset"]["task"]}_{args.span}_{args.chunking_strategy}.db'
+
     else:
         varint = None
-        db_path = f'sqlite:////scratch/sas10092/ehr-foundation/models/optuna_dbs/with_retrieval/{config["backbone_name"]}_{prot_status}_{config["dataset"]["task"]}_{args.span}_{args.chunking_strategy}.db'
+        db_path = f'sqlite:////scratch/sas10092/ehr-foundation/models/optuna_dbs/{config["backbone_name"]}_{prot_status}_{config["dataset"]["task"]}_{args.span}_{args.chunking_strategy}.db'
+        # db_path = f'sqlite:////scratch/sas10092/ehr-foundation/models/optuna_dbs/{config["backbone_name"]}_{prot_status}_{config["dataset"]["task"]}_{args.span}_{args.chunking_strategy}.db'
 
     study = optuna.create_study(study_name=config['backbone_name'],
-                                direction="minimize", 
+                                direction="maximize", 
                                 storage=db_path,
                                 pruner=pruner,
                                 sampler=TPESampler(),
                                 load_if_exists=True)
 
-    study.optimize(objective, n_trials=25,show_progress_bar=True,gc_after_trial=True)
+    study.optimize(objective, n_trials=100,show_progress_bar=True,gc_after_trial=True)
 
 
 if __name__ == "__main__":

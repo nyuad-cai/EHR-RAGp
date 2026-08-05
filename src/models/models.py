@@ -6,7 +6,7 @@ import torch
 import lightning as lt
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Mapping
 from .utils import Time2Vec, log_bootstrap_ci_text_percentile
 from torchmetrics.classification import Accuracy, BinaryAUROC, BinaryAveragePrecision
 
@@ -610,6 +610,98 @@ class EvalModel(lt.LightningModule):
 ###############################
 # Ours
 ###############################
+
+class CLMBREncoders(nn.Module):
+    def __init__(
+        self,
+        model: nn.Module,
+        batch_processor=None,
+        normalize: bool = False,
+        freeze: bool = False,
+        device: str = None,
+    ):
+        super().__init__()
+
+        self.model = model
+        self.batch_processor = batch_processor
+        self.normalize = normalize
+        self.device_ = device or ("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.model.to(self.device_)
+
+        if freeze:
+            for p in self.model.parameters():
+                p.requires_grad = False
+
+    def forward(
+        self,
+        batch: Dict[str, Any],
+        query_key: str = "query",
+        history_key: str = "history",
+    ) -> Dict[str, torch.Tensor]:
+
+        q_batch = batch[query_key]
+        h_batch = batch[history_key]
+
+        q_vec = self._encode_packed_batch(q_batch)  # [B, H]
+
+        h_vec_flat = self._encode_packed_batch(h_batch)  # [B*K, H]
+
+        B, K = batch["history_valid_mask"].shape
+        H = h_vec_flat.shape[-1]
+
+        h_vec = h_vec_flat.reshape(B, K, H)
+
+        return {
+            "query_vec": q_vec,
+            "hist_vec": h_vec,
+        }
+
+    def _encode_packed_batch(
+        self,
+        raw_batch: Mapping[str, Any],
+    ) -> torch.Tensor:
+#         if self.batch_processor is not None:
+#             batch = self.batch_processor.collate([raw_batch])["batch"]
+#             batch = femr.models.transformer.remove_first_dimension(batch)
+#         else:
+        batch = raw_batch
+
+        transformer_batch = self._move_transformer_to_device(batch["transformer"])
+
+        reprs = self.model.transformer(transformer_batch)
+
+        patient_lengths = torch.as_tensor(
+            transformer_batch["patient_lengths"],
+            dtype=torch.long,
+            device=reprs.device,
+        )
+
+        end_positions = torch.cumsum(patient_lengths, dim=0) - 1
+
+        vec = reprs[end_positions]
+
+        if self.normalize:
+            vec = nn.functional.normalize(vec, p=2, dim=-1)
+
+        return vec
+
+    def _move_transformer_to_device(
+        self,
+        transformer_batch: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+
+        out = {}
+
+        for k, v in transformer_batch.items():
+            if torch.is_tensor(v):
+                out[k] = v.to(self.device_)
+            else:
+                out[k] = torch.as_tensor(v).to(self.device_)
+
+        return out
+
+
 class EHRRAPEncoders(nn.Module):
     def __init__(
         self,
@@ -1413,3 +1505,466 @@ class EHRRAPEvalModel(lt.LightningModule):
         return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
 
+
+
+
+class CLMBREncoders(nn.Module):
+    def __init__(
+        self,
+        model: nn.Module,
+        batch_processor=None,
+        normalize: bool = False,
+        freeze: bool = False,
+        device: str = None,
+    ):
+        super().__init__()
+
+        self.model = model
+        self.batch_processor = batch_processor
+        self.normalize = normalize
+        self.device_ = device or ("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.model.to(self.device_)
+
+        if freeze:
+            for p in self.model.parameters():
+                p.requires_grad = False
+
+    def forward(
+        self,
+        batch: Dict[str, Any],
+        query_key: str = "query",
+        history_key: str = "history",
+    ) -> Dict[str, torch.Tensor]:
+
+        q_batch = batch[query_key]
+        h_batch = batch[history_key]
+
+        q_vec = self._encode_packed_batch(q_batch)  # [B, H]
+
+        h_vec_flat = self._encode_packed_batch(h_batch)  # [B*K, H]
+
+        B, K = batch["history_valid_mask"].shape
+        H = h_vec_flat.shape[-1]
+
+        h_vec = h_vec_flat.reshape(B, K, H)
+
+        return {
+            "query_vec": q_vec,
+            "hist_vec": h_vec,
+        }
+
+    def _encode_packed_batch(
+        self,
+        raw_batch: Mapping[str, Any],
+    ) -> torch.Tensor:
+#         if self.batch_processor is not None:
+#             batch = self.batch_processor.collate([raw_batch])["batch"]
+#             batch = femr.models.transformer.remove_first_dimension(batch)
+#         else:
+        batch = raw_batch
+
+        transformer_batch = self._move_transformer_to_device(batch["transformer"])
+
+        reprs = self.model.transformer(transformer_batch)
+
+        patient_lengths = torch.as_tensor(
+            transformer_batch["patient_lengths"],
+            dtype=torch.long,
+            device=reprs.device,
+        )
+
+        end_positions = torch.cumsum(patient_lengths, dim=0) - 1
+
+        vec = reprs[end_positions]
+
+        if self.normalize:
+            vec = nn.functional.normalize(vec, p=2, dim=-1)
+
+        return vec
+
+    def _move_transformer_to_device(
+        self,
+        transformer_batch: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+
+        out = {}
+
+        for k, v in transformer_batch.items():
+            if torch.is_tensor(v):
+                out[k] = v.to(self.device_)
+            else:
+                out[k] = torch.as_tensor(v).to(self.device_)
+
+        return out
+
+
+class CLMBRRAPEvalModel(lt.LightningModule):
+    def __init__(
+        self,
+        clmbr_model,
+        batch_processor=None,
+        hidden_size: int = 768,
+        lr: float = 2e-5,
+        wd: float = 0.001,
+        max_epochs: int = 100,
+        dropout: float = 0.1,
+        freeze: bool = False,
+        # --- prototype module ---
+        num_prototypes: int = 256,
+        query_temperature: float = 0.1,
+        history_temperature: float = 0.025,
+        normalize_prototypes: bool = True,
+        softmax_threshold: float = 0.8,
+        softmax_temperature: float = 1.0,
+        sample_ent_lambda: float = 0.001,
+        usage_ent_lambda: float = 0.001,
+        use_prototypes: bool = False,
+        # --- fusion module ---
+        fusion_layers: int = 2,
+        fusion_heads: int = 4,
+        fusion_ff_mult: int = 4,
+        fusion_output_mode: str = "query",
+        use_weights_as_gating: bool = False,
+    ):
+        super().__init__()
+
+        self.save_hyperparameters(ignore=["clmbr_model", "batch_processor"])
+
+        self.hidden_size = hidden_size
+        self.sample_ent_lambda = float(sample_ent_lambda)
+        self.usage_ent_lambda = float(usage_ent_lambda)
+        self.use_prototypes = use_prototypes
+
+        self.encoders = CLMBREncoders(
+            model=clmbr_model,
+            batch_processor=batch_processor,
+            normalize=False,
+            freeze=freeze,
+        )
+
+        self.prototypes = PrototypeRetrievalModule(
+            hidden_size=hidden_size,
+            num_prototypes=num_prototypes,
+            query_temperature=query_temperature,
+            history_temperature=history_temperature,
+            normalize_prototypes=normalize_prototypes,
+            softmax_threshold=softmax_threshold,
+            softmax_temperature=softmax_temperature,
+        )
+
+        self.fusion = FusionModule(
+            hidden_size=hidden_size,
+            num_layers=fusion_layers,
+            num_heads=fusion_heads,
+            ff_mult=fusion_ff_mult,
+            dropout=dropout,
+            use_weights_as_gating=use_weights_as_gating,
+            output_mode=fusion_output_mode,
+            return_seq=False,
+        )
+
+        self.classifier = nn.Linear(hidden_size, 1)
+        self.criterion = nn.BCEWithLogitsLoss()
+
+        self.lr = lr
+        self.wd = wd
+        self.max_epochs = max_epochs
+
+        self.train_auroc = BinaryAUROC()
+        self.train_auprc = BinaryAveragePrecision()
+        self.val_auroc = BinaryAUROC()
+        self.val_auprc = BinaryAveragePrecision()
+        self.test_auroc = BinaryAUROC()
+        self.test_auprc = BinaryAveragePrecision()
+
+        self._train_preds, self._train_labels = [], []
+        self._val_preds, self._val_labels = [], []
+        self._test_preds, self._test_labels = [], []
+
+    def forward(self, batch: Dict[str, Any]) -> Dict[str, torch.Tensor]:
+        enc_out = self.encoders(batch, query_key="query", history_key="history")
+
+        proto_out = None
+        attn_mask = None
+        attn_weights = None
+        hist_valid_mask = batch["history_valid_mask"]
+
+        if self.use_prototypes:
+            proto_out = self.prototypes(
+                query_vec=enc_out["query_vec"],
+                hist_vec=enc_out["hist_vec"],
+                hist_valid_mask=hist_valid_mask,
+            )
+            attn_mask = proto_out["attn_mask"]
+            attn_weights = proto_out["attn_weights"]
+
+        fuse_out = self.fusion(
+            query_vec=enc_out["query_vec"],
+            hist_vec=enc_out["hist_vec"],
+            attn_mask=attn_mask,
+            attn_weights=attn_weights,
+            hist_valid_mask=hist_valid_mask,
+        )
+
+        fused_vec = fuse_out["fused_vec"]
+        logits = self.classifier(fused_vec).squeeze(-1)
+
+        out = {
+            "logits": logits,
+            "fused_vec": fused_vec,
+        }
+
+        if proto_out is not None:
+            out["proto"] = proto_out
+
+        return out
+
+    def shared_step(self, batch: Dict[str, Any], stage: str) -> torch.Tensor:
+        out = self.forward(batch)
+        proto = out.get("proto", None)
+
+        if proto is not None and "diag_q_ent" in proto:
+            self.log(
+                f"{stage}_sample_q_ent",
+                proto["diag_q_ent"],
+                prog_bar=True,
+                on_step=True,
+                on_epoch=True,
+                logger=True,
+                sync_dist=True,
+            )
+            self.log(
+                f"{stage}_q_max",
+                proto["diag_q_max"],
+                prog_bar=True,
+                on_step=True,
+                on_epoch=True,
+                logger=True,
+                sync_dist=True,
+            )
+            self.log(
+                f"{stage}_sample_h_ent",
+                proto["diag_h_ent"],
+                prog_bar=True,
+                on_step=True,
+                on_epoch=True,
+                logger=True,
+                sync_dist=True,
+            )
+            self.log(
+                f"{stage}_h_max",
+                proto["diag_h_max"],
+                prog_bar=True,
+                on_step=True,
+                on_epoch=True,
+                logger=True,
+                sync_dist=True,
+            )
+
+        if proto is not None and "diag_mean_q_ent" in proto:
+            self.log(
+                f"{stage}_batch_q_ent",
+                proto["diag_mean_q_ent"],
+                prog_bar=False,
+                on_step=True,
+                on_epoch=True,
+                logger=True,
+                sync_dist=True,
+            )
+            self.log(
+                f"{stage}_batch_h_ent",
+                proto["diag_mean_h_ent"],
+                prog_bar=False,
+                on_step=True,
+                on_epoch=True,
+                logger=True,
+                sync_dist=True,
+            )
+
+        logits = out["logits"]
+        y = batch["label"].float().view(-1)
+
+        task_loss = self.criterion(logits, y)
+
+        sample_ent_reg = task_loss.new_zeros(())
+        usage_ent_reg = task_loss.new_zeros(())
+
+        if proto is not None and "diag_q_ent" in proto and self.sample_ent_lambda > 0.0:
+            sample_ent_reg = proto["diag_q_ent"] + proto["diag_h_ent"]
+
+        if proto is not None and "diag_mean_q_ent" in proto and self.usage_ent_lambda > 0.0:
+            usage_ent_reg = -(proto["diag_mean_q_ent"] + proto["diag_mean_h_ent"])
+
+        total_loss = (
+            task_loss
+            + self.sample_ent_lambda * sample_ent_reg
+            + self.usage_ent_lambda * usage_ent_reg
+        )
+
+        self.log(
+            f"{stage}_loss",
+            task_loss,
+            prog_bar=False,
+            on_step=True,
+            on_epoch=True,
+            logger=True,
+            sync_dist=True,
+        )
+        self.log(
+            f"{stage}_total_loss",
+            total_loss,
+            prog_bar=False,
+            on_step=True,
+            on_epoch=True,
+            logger=True,
+            sync_dist=True,
+        )
+
+        pos_score = torch.sigmoid(logits)
+
+        if stage == "train":
+            self._train_labels.append(y.detach())
+            self._train_preds.append(pos_score.detach())
+        elif stage == "val":
+            self._val_labels.append(y.detach())
+            self._val_preds.append(pos_score.detach())
+        elif stage == "test":
+            self._test_labels.append(y.detach())
+            self._test_preds.append(pos_score.detach())
+
+        if proto is not None and "attn_weights" in proto and proto["attn_weights"] is not None:
+            with torch.no_grad():
+                weights = proto["attn_weights"].float()
+                mask = batch["history_valid_mask"].float()
+
+                if not self.fusion.use_weights_as_gating:
+                    hard_keep = (weights >= self.prototypes.softmax_threshold).float()
+                    keep_rate = (hard_keep * mask).sum() / mask.sum().clamp_min(1.0)
+
+                    self.log(
+                        f"{stage}_keep_rate",
+                        keep_rate,
+                        prog_bar=False,
+                        on_step=True,
+                        on_epoch=True,
+                        logger=True,
+                        sync_dist=True,
+                    )
+
+                else:
+                    weights = weights * mask
+                    denom = weights.sum(dim=1, keepdim=True).clamp_min(1e-8)
+                    weights_norm = weights / denom
+
+                    weight_entropy = -(
+                        weights_norm * weights_norm.clamp_min(1e-8).log()
+                    ).sum(dim=1)
+
+                    valid_counts = mask.sum(dim=1).clamp_min(1.0)
+                    max_entropy = valid_counts.log().clamp_min(1e-8)
+                    weight_entropy_norm = (weight_entropy / max_entropy).mean()
+
+                    self.log(
+                        f"{stage}_weight_entropy",
+                        weight_entropy.mean(),
+                        prog_bar=False,
+                        on_step=True,
+                        on_epoch=True,
+                        logger=True,
+                        sync_dist=True,
+                    )
+                    self.log(
+                        f"{stage}_weight_entropy_norm",
+                        weight_entropy_norm,
+                        prog_bar=False,
+                        on_step=True,
+                        on_epoch=True,
+                        logger=True,
+                        sync_dist=True,
+                    )
+
+        return total_loss
+
+    def training_step(self, batch: Dict[str, Any], batch_idx: int) -> torch.Tensor:
+        return self.shared_step(batch, stage="train")
+
+    def validation_step(self, batch: Dict[str, Any], batch_idx: int) -> torch.Tensor:
+        return self.shared_step(batch, stage="val")
+
+    def test_step(self, batch: Dict[str, Any], batch_idx: int) -> torch.Tensor:
+        return self.shared_step(batch, stage="test")
+
+    def on_train_epoch_end(self) -> None:
+        if not self._train_preds:
+            return
+
+        y = torch.cat(self._train_labels)
+        p = torch.cat(self._train_preds)
+
+        self.log("train_auroc",self.val_auroc(p, y.long()), on_epoch=True, logger=True, prog_bar=True, sync_dist=True,)
+        self.log("train_auprc",self.val_auprc(p, y.long()),on_epoch=True, logger=True, prog_bar=True, sync_dist=True,)
+
+        self._train_labels.clear()
+        self._train_preds.clear()
+
+    def on_validation_epoch_end(self) -> None:
+        if not self._val_preds:
+            return
+
+        y = torch.cat(self._val_labels)
+        p = torch.cat(self._val_preds)
+
+        self.log("val_auroc",self.val_auroc(p, y.long()), on_epoch=True, logger=True, prog_bar=True, sync_dist=True,)
+        self.log("val_auprc",self.val_auprc(p, y.long()),on_epoch=True, logger=True, prog_bar=True, sync_dist=True,)
+
+        self._val_labels.clear()
+        self._val_preds.clear()
+
+    def on_test_epoch_end(self) -> None:
+        if not self._test_preds:
+            return
+
+        y = torch.cat(self._test_labels)
+        p = torch.cat(self._test_preds)
+
+        self.log("test_auroc", self.test_auroc(p, y.long()), on_epoch=True, logger=True)
+        self.log("test_auprc", self.test_auprc(p, y.long()), on_epoch=True, logger=True)
+
+        log_bootstrap_ci_text_percentile(module=self,
+                                         y_true=y,
+                                         y_score=p,
+                                         prefix="test",
+                                         num_iter=1000,
+                                         alpha=0.05,
+                                         ndigits=3,)
+
+        self._test_labels.clear()
+        self._test_preds.clear()
+
+    def configure_optimizers(self):
+        param_groups = [{"params": self.encoders.parameters()},
+                        {"params": self.fusion.parameters()},
+                        {"params": self.classifier.parameters()}]
+
+        if self.use_prototypes:
+            param_groups.insert(1, {"params": self.prototypes.parameters()})
+
+        optimizer = torch.optim.SGD(param_groups,
+                                    lr=self.lr,
+                                    momentum=0.9,
+                                    nesterov=True,
+                                    weight_decay=self.wd)
+
+#         optimizer = torch.optim.AdamW(param_groups,
+#                                     lr=self.lr,
+# #                                     momentum=0.9,
+# #                                     nesterov=True,
+#                                     betas=(0.9,0.95),
+#                                     weight_decay=self.wd)
+
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer,
+                                                               T_max=self.max_epochs,
+                                                               eta_min=0.0)
+
+        return {"optimizer": optimizer, "lr_scheduler": scheduler}

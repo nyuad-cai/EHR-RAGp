@@ -18,4 +18,5 @@
 
 # module load gcc
 
-srun python preprocess.py
+# srun python preprocess.py
+srun python audit.py
