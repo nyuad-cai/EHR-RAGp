@@ -435,7 +435,7 @@ def objective(trial: optuna.trial.Trial) -> float:
 
         assert best_ckpt and os.path.exists(best_ckpt)
 
-        trainer.test(model=model, dataloaders=test_dataloader, ckpt_path=best_ckpt)
+        
 
         # shutil.rmtree(ckpt_dir, ignore_errors=True)
 
