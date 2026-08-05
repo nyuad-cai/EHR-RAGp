@@ -273,6 +273,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                                     use_weights_as_gating=True)
             
         elif args.benchmark == "ehrshot": 
+            task = 'lupus'
             train_dataset =  CLMBRRetrievalDataset(dataset_path=config['dataset']['data_path'],
                                                     data_idx_path=config['dataset']['data_idx_path'],
                                                     vectordb_path=f"./data/faiss_clmbr/{config['dataset']['seq_length_q']}/{args.chunking_strategy}/{span_dir}/{task}",
@@ -295,16 +296,6 @@ def objective(trial: optuna.trial.Trial) -> float:
                                                  history_overlap=overlap_h,
                                                  chunking_strategy=args.chunking_strategy)
 
-            test_dataset =  CLMBRRetrievalDataset(dataset_path=config['dataset']['data_path'],
-                                                  data_idx_path=config['dataset']['data_idx_path'],
-                                                  vectordb_path=f"./data/faiss_clmbr/{config['dataset']['seq_length_q']}/{args.chunking_strategy}/{span_dir}/{task}",
-                                                  task=task,
-                                                  split="test",
-                                                  top_k=top_k,
-                                                  query_length=config['dataset']['seq_length_q'],
-                                                  history_chunk_length=seq_length_h,
-                                                  history_overlap=overlap_h,
-                                                  chunking_strategy=args.chunking_strategy)
             
             retrieval_collator = CLMBRRetrievalCollator(top_k=top_k)
 
