@@ -243,26 +243,6 @@ def objective(trial: optuna.trial.Trial) -> float:
                                             window_hours= window_hours,
                                             uniform_retrieval=args.uniform,
                                             split= 'tuning')
-            test_dataset = RetrievalDataset(data_idx_path=args.data_idx_path,
-                                            dataset_path= args.data_path,
-                                            vectordb_path=f"/faiss/{args.seq_length_q}/{args.chunking_strategy}/{span_dir}/{window}",
-                                            tokenizer_path=args.tokenizer_path,
-                                            limits_dict=limits,
-                                            chunking_strategy= args.chunking_strategy,
-                                            task= args.task,
-                                            query_window=args.main_window_query,
-                                            history_window=args.main_window_history,
-                                            top_k=top_k,
-                                            seq_length_q = args.seq_length_q,
-                                            overlap_q= args.overlap_q,
-                                            seq_length_h= seq_length_h,
-                                            overlap_h=overlap_h,
-                                            use_time= True,
-                                            use_numeric= True,
-                                            add_cls=True,
-                                            window_hours= window_hours,
-                                            uniform_retrieval=args.uniform,
-                                            split= 'held_out')
         
             chunk_collator = EvalCollator(tokenizer=train_dataset.query_gen.tokenizer,
                                         use_mask_augmentation= True if use_augmentation == 1 else False,
@@ -336,16 +316,6 @@ def objective(trial: optuna.trial.Trial) -> float:
                                                  history_overlap=overlap_h,
                                                  chunking_strategy=args.chunking_strategy)
 
-            test_dataset =  CLMBRRetrievalDataset(dataset_path=args.data_path,
-                                                 data_idx_path=args.data_idx_path,
-                                                 vectordb_path=f"./data/faiss_clmbr/{args.seq_length_q}/{args.chunking_strategy}/{span_dir}/{args.task}",
-                                                 task=args.task,
-                                                 split="test",
-                                                 top_k=top_k,
-                                                 query_length=args.seq_length_q,
-                                                 history_chunk_length=seq_length_h,
-                                                 history_overlap=overlap_h,
-                                                 chunking_strategy=args.chunking_strategy)
 
             
             retrieval_collator = CLMBRRetrievalCollator(top_k=top_k)
@@ -404,15 +374,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                                     persistent_workers=True,
                                     pin_memory=True,
                                     )
-        test_dataloader = DataLoader(dataset=test_dataset,
-                                    batch_size=batch_size,
-                                    shuffle=True,
-                                    collate_fn=retrieval_collator,
-                                    num_workers=12,
-                                    prefetch_factor=2,
-                                    persistent_workers=True,
-                                    pin_memory=True,
-                                    )
+
  
         checkpoint_callback = ModelCheckpoint(dirpath=ckpt_dir,
                                                 monitor='val_loss',
@@ -447,13 +409,6 @@ def objective(trial: optuna.trial.Trial) -> float:
                             )
 
         trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
-        best_ckpt = checkpoint_callback.best_model_path
-        print("Using best ckpt:", best_ckpt)
-        print("Best val score:", checkpoint_callback.best_model_score)
-
-        assert best_ckpt and os.path.exists(best_ckpt)
-
-        trainer.test(model=model, dataloaders=test_dataloader, ckpt_path=best_ckpt,weights_only=False)
 
     except optuna.exceptions.TrialPruned:
         wandb.finish()
