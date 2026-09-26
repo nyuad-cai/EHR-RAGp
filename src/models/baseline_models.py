@@ -330,8 +330,8 @@ class DescEmbEvalModel(lt.LightningModule):
                     "hadm_id": gathered_hadm_ids.cpu().numpy(),
                     "icustay_id": gathered_icustay_ids.cpu().numpy(),
                     "label": gathered_y.cpu().numpy(),
-                    "prediction": gathered_pos_score.cpu().numpy(),
-                    "logit": gathered_logits.cpu().numpy(),
+                    "prediction": gathered_pos_score.float().cpu().numpy(),
+                    "logit": gathered_logits.float().cpu().numpy(),
                 }
             )
 
@@ -786,8 +786,8 @@ class GenHPFDownstreamModule(lt.LightningModule):
                     "hadm_id": gathered_hadm_ids.cpu().numpy(),
                     "icustay_id": gathered_icustay_ids.cpu().numpy(),
                     "label": gathered_y.cpu().numpy(),
-                    "prediction": gathered_pos_score.cpu().numpy(),
-                    "logit": gathered_logits.cpu().numpy(),
+                    "prediction": gathered_pos_score.float().cpu().numpy(),
+                    "logit": gathered_logits.float().cpu().numpy(),
                 }
             )
 
@@ -1404,8 +1404,8 @@ class REMedLightningModule(lt.LightningModule):
                     "hadm_id": gathered_hadm_ids.cpu().numpy(),
                     "icustay_id": gathered_icustay_ids.cpu().numpy(),
                     "label": gathered_y.cpu().numpy(),
-                    "prediction": gathered_pos_score.cpu().numpy(),
-                    "logit": gathered_logits.cpu().numpy(),
+                    "prediction": gathered_pos_score.float().cpu().numpy(),
+                    "logit": gathered_logits.float().cpu().numpy(),
                 }
             )
 
@@ -1920,8 +1920,8 @@ class HiBEHRTModule(lt.LightningModule):
                     "hadm_id": gathered_hadm_ids.cpu().numpy(),
                     "icustay_id": gathered_icustay_ids.cpu().numpy(),
                     "label": gathered_y.cpu().numpy(),
-                    "prediction": gathered_pos_score.cpu().numpy(),
-                    "logit": gathered_logits.cpu().numpy(),
+                    "prediction": gathered_pos_score.float().cpu().numpy(),
+                    "logit": gathered_logits.cpu().float().numpy(),
                 }
             )
 

@@ -1,19 +1,24 @@
-
-
 import os
 import yaml
 import json
 import torch
 import wandb
+import optuna
+
 import polars as pl
-from tqdm import tqdm
 import torch.nn as nn
 import torch.distributed as dist
 
+from tqdm import tqdm
 from typing import Callable
+from optuna.trial import TrialState
 from transformers import BertConfig
 from torchmetrics.classification import BinaryAUROC, BinaryAveragePrecision
 from transformers import CONFIG_MAPPING, MODEL_FOR_MASKED_LM_MAPPING, MODEL_MAPPING, MODEL_FOR_CAUSAL_LM_MAPPING
+
+
+
+
 
 def correct_tokenizer_dict(dict_fp:str):
     with open(dict_fp) as f:
@@ -415,3 +420,53 @@ def predict_dataset(dataset, data_idx_path, window, task_name, model_bundle, spl
         })
 
     return results
+
+
+
+
+
+def best_trial(
+    db_path: str,
+    study_name: str,
+    n_trials: int = 50,
+    direction: str = 'min'
+):
+    study = optuna.load_study(
+        study_name=study_name,
+        storage=f"sqlite:///{db_path}"
+    )
+
+    first_n = sorted(study.trials, key=lambda t: t.number)[:n_trials]
+    completed = [t for t in first_n if t.state == TrialState.COMPLETE]
+
+    if not completed:
+        raise ValueError("No completed trials found in the first N trials.")
+
+    if direction == 'min':
+        best = min(completed, key=lambda t: t.value)
+    elif direction == 'max':
+        best = max(completed, key=lambda t: t.value)
+    else:
+        raise ValueError("Direction must be 'min' or 'max'")
+
+    return {
+        'trial_number': best.number,
+        'value': best.value,
+        'learning_rate': best.params.get('learning_rate'),
+        'weight_decay': best.params.get('weight_decay'),
+        'dropout': best.params.get('dropout')
+    }
+
+def parse_task_and_variant(raw_task: str, arch: str):
+    if raw_task.startswith("base_"):
+        task = raw_task[len("base_"):]
+        variant = None
+    elif arch in ['bert', 'descemb']:
+        parts = raw_task.split('_', 1)
+        variant = parts[0]
+        task = parts[1]
+    else:
+        task = raw_task
+        variant = None
+        
+    return task, variant

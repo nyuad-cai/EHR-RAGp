@@ -487,7 +487,7 @@ class VectorDBUploader:
 
 
 
-
+@torch.inference_mode()
 def build_indices(data_idx_path:str,
                   hf_dataset_path: str,
                   tokenizer_path: str,
@@ -536,7 +536,7 @@ def build_indices(data_idx_path:str,
                              type_vocab_size= 43,
                              visit_vocab_size= 990,
                              stage_vocab_size= 5)
-
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     embedder = EHREmbedder(
         config=cfg_ret,
         backbone=ModelClassRet,
@@ -547,7 +547,8 @@ def build_indices(data_idx_path:str,
         use_type=use_type,
         use_visit=use_visit,
         use_stage=use_stage,
-        )
+        ).to(device)
+    embedder.eval()
     
     
     if chunking_strategy == 'overlap':
@@ -597,7 +598,7 @@ def build_indices(data_idx_path:str,
         query = {k: (v[start_q:end_q] if isinstance(v, list) else v) for k, v in query.items()}
         query = seq_gen_q.get_overlapped_chunks(timeline=query,add_cls_per_chunk=True)[0]
         # query = {k: query[k] for k in ["input_ids", "attention_mask", "visit_ids", "stage_ids", "type_ids"] if k in query}
-        query = {k: torch.tensor(v) for k, v in query.items()}
+        query = {k: torch.tensor(v, device=device) for k, v in query.items()}
 
 
         start_limit_h = limits_dict[main_window_h][seq_length_q][0]
@@ -626,35 +627,37 @@ def build_indices(data_idx_path:str,
             
         # history = [{k: chunk[k] for k in ["input_ids", "attention_mask", "visit_ids", "stage_ids", "type_ids"] 
         #             if k in chunk} for chunk in history]
-        history = [{k: torch.tensor(v) for k, v in chunk.items()} for chunk in history]
+        history = [{k: torch.tensor(v, device=device) for k, v in chunk.items()} for chunk in history]
         history = {k: torch.stack([c[k] for c in history], dim=0) for k in history[0].keys()}
+        with torch.amp.autocast('cuda', dtype=torch.bfloat16):
+            q_emb = embedder.encode(
+                input_ids=query['input_ids'].unsqueeze(0),
+                attention_mask=query['attention_mask'].unsqueeze(0),
+                type_ids=query['type_ids'].unsqueeze(0) if use_type else None,
+                visit_ids=query['visit_ids'].unsqueeze(0) if use_visit else None,
+                stage_ids=query['stage_ids'].unsqueeze(0) if use_stage else None,
+                time_feats=query['time_diff'].unsqueeze(0) if use_time else None,
+                numeric_values=query['numeric_values'].unsqueeze(0) if use_numeric else None,
+                numeric_mask=query['numeric_mask'].unsqueeze(0) if use_numeric else None,
+            )
 
-        q_emb = embedder.encode(
-            input_ids=query['input_ids'].unsqueeze(0),
-            attention_mask=query['attention_mask'].unsqueeze(0),
-            type_ids=query['type_ids'].unsqueeze(0) if use_type else None,
-            visit_ids=query['visit_ids'].unsqueeze(0) if use_visit else None,
-            stage_ids=query['stage_ids'].unsqueeze(0) if use_stage else None,
-            time_feats=query['time_diff'].unsqueeze(0) if use_time else None,
-            numeric_values=query['numeric_values'].unsqueeze(0) if use_numeric else None,
-            numeric_mask=query['numeric_mask'].unsqueeze(0) if use_numeric else None,
-        )
-
-        ch_emb = embedder.encode(
-            input_ids=history['input_ids'],
-            attention_mask=history['attention_mask'],
-            type_ids=history['type_ids'] if use_type else None,
-            visit_ids=history['visit_ids'] if use_visit else None,
-            stage_ids=history['stage_ids'] if use_stage else None,
-            time_feats=history['time_diff'] if use_time else None,
-            numeric_values=history['numeric_values'] if use_numeric else None,
-            numeric_mask=history['numeric_mask'] if use_numeric else None,
-        )
+            ch_emb = embedder.encode(
+                input_ids=history['input_ids'],
+                attention_mask=history['attention_mask'],
+                type_ids=history['type_ids'] if use_type else None,
+                visit_ids=history['visit_ids'] if use_visit else None,
+                stage_ids=history['stage_ids'] if use_stage else None,
+                time_feats=history['time_diff'] if use_time else None,
+                numeric_values=history['numeric_values'] if use_numeric else None,
+                numeric_mask=history['numeric_mask'] if use_numeric else None,
+            )
 
         ch_emb = torch.cat((ch_emb,q_emb),dim=0)
 
         idx, _ = build_faiss_index(ch_embs=ch_emb, metric='cosine')
         faiss.write_index(idx, os.path.join(save_path,f"{stay_id}.faiss"))
+        del q_emb, ch_emb, history, query, idx
+        torch.cuda.empty_cache()
 
 
 

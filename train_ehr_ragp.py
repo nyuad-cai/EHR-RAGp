@@ -40,6 +40,7 @@ parser.add_argument('--seq-length-q', type=int, default=None)
 parser.add_argument('--overlap-q', type=int, default=None)
 parser.add_argument('--main-window-query', type=str, default=None)
 parser.add_argument('--main-window-history', type=str, default=None)
+parser.add_argument('--uniform', action='store_true')
 
 # model
 parser.add_argument('--ckpt-path', type=str, default=None)
@@ -73,54 +74,32 @@ def get_gpu_name():
     else:
         raise RuntimeError("No GPU available")
 
-gpu_bs = {256:{'NVIDIA A100 80GB PCIe': 12,
-               'NVIDIA A100-SXM4-80GB':12 ,
-               'NVIDIA H100 NVL': 16,
-               'NVIDIA H200':20
+gpu_bs = {256:{'NVIDIA A100 80GB PCIe': 12 if args.backbone_name == 'roformer' else 24,
+               'NVIDIA A100-SXM4-80GB':12  if args.backbone_name == 'roformer' else 24,
+               'NVIDIA H100 NVL': 16 if args.backbone_name == 'roformer' else 32,
+               'NVIDIA H200':20 if  args.backbone_name == 'roformer' else 40
                },
 
-          512:{'NVIDIA A100 80GB PCIe': 8,
-               'NVIDIA A100-SXM4-80GB':8,
-               'NVIDIA H100 NVL': 12,
-               'NVIDIA H200': 16
+          512:{'NVIDIA A100 80GB PCIe': 8 if args.backbone_name == 'roformer' else 16,
+               'NVIDIA A100-SXM4-80GB':8 if args.backbone_name == 'roformer' else 16,
+               'NVIDIA H100 NVL': 12 if args.backbone_name == 'roformer' else 24,
+               'NVIDIA H200': 16 if args.backbone_name == 'roformer' else 32
                 },
-          1024:{'NVIDIA A100 80GB PCIe': 4,
-                'NVIDIA A100-SXM4-80GB':4,
-                'NVIDIA H100 NVL': 6,
-                'NVIDIA H200': 8
+          1024:{'NVIDIA A100 80GB PCIe': 4 if args.backbone_name == 'roformer' else 8,
+                'NVIDIA A100-SXM4-80GB':4 if args.backbone_name == 'roformer' else 8,
+                'NVIDIA H100 NVL': 6 if args.backbone_name == 'roformer' else 12,
+                'NVIDIA H200': 8 if args.backbone_name == 'roformer' else 16
                 } 
            }
 def objective(trial: optuna.trial.Trial) -> float:
-    
     try:
-        wandb.login(key=args.wandb_api_key)
-        
-        if args.variant is not None:
-            version = f"{args.backbone_name}_{args.variant}_{args.job_id}_{args.task}_{args.chunking_strategy}_{span_dir}_{prot_status}_{trial.number}"
-            name = f"{args.backbone_name}_{args.variant}_{args.job_id}_{args.task}_{args.chunking_strategy}_{span_dir}_{prot_status}_{trial.number}"
-            tags = [args.version,args.task,args.backbone_name,'hparams_opt',args.chunking_strategy, args.variant,'existing-fm','random']
-        else:
-            version = f"{args.backbone_name}_{args.job_id}_{args.task}_{args.chunking_strategy}_{span_dir}_{prot_status}_{trial.number}"
-            name = f"{args.backbone_name}_{args.job_id}_{args.task}_{args.chunking_strategy}_{span_dir}_{prot_status}_{trial.number}"
-            tags = [args.version,args.task,args.backbone_name,'hparams_opt',args.chunking_strategy,'random']
-
-        wandb_logger = WandbLogger(project='MedEHR_Eval',
-                                   save_dir=args.wandb_log_dir,
-                                   version=version,
-                                   name=name,
-                                   tags=tags) 
-        
-        run_dir = get_run_dir(wandb_logger)         
-        ckpt_dir = os.path.join(run_dir, "ckpt")
-        make_dir(ckpt_dir)
-        prediction_csv_path = os.path.join(ckpt_dir,"test_predictions.csv")
         # training
         learning_rate =trial.suggest_float("learning_rate",  1e-5, 5e-4, log=True)
         weight_decay =trial.suggest_float("weight_decay", 1e-3, 1e-2, log=True)
         # model
         pooling_enc =trial.suggest_categorical("pooling_enc",['cls','mean'])
         pooling_fuse =trial.suggest_categorical("pooling_fuse",['query','mean'])
-        use_augmentation = trial.suggest_categorical("use_augmentation", [1, 0])
+        use_augmentation = 0
 
         if args.use_prototypes:
             usage_lambda = trial.suggest_categorical("ent_lambda", [0.004, 0.005, 0.006, 0.007])
@@ -159,8 +138,6 @@ def objective(trial: optuna.trial.Trial) -> float:
                 gpu_name = get_gpu_name()
                 batch_size = gpu_bs[seq_length_h][gpu_name]
 
-            
-
         elif args.chunking_strategy == "time":
             window_hours = 6.0
             seq_length_h = 256
@@ -191,14 +168,38 @@ def objective(trial: optuna.trial.Trial) -> float:
             gpu_name = get_gpu_name()
             batch_size = gpu_bs[seq_length_h][gpu_name]
 
-        
-        
         if args.task == 'y_los_7':
             window = 'w24'
         elif args.task == 'y_mort':    
             window = 'w48'
-        elif args.task in ['y_mort_1yr','y_icu_readmit_30']:
+        elif args.task in ['y_mort_12mo','y_icu_readmit_30']:
             window = 'wstay'
+
+        wandb.login(key=args.wandb_api_key)
+        retrieval_status = "uniform" if args.uniform else None
+        if args.variant is not None:
+            version = f"{args.backbone_name}_{args.variant}_{args.job_id}_{args.task}_{args.chunking_strategy}_{span_dir}_{prot_status}_{trial.number}"
+            name = f"{args.backbone_name}_{args.variant}_{args.job_id}_{args.task}_{args.chunking_strategy}_{span_dir}_{prot_status}_{trial.number}"
+            tags = [args.version,args.task,args.backbone_name,'hparams',args.chunking_strategy, prot_status,args.variant, 'existing']
+        elif args.uniform:
+            version = f"{args.backbone_name}_{args.job_id}_{args.task}_{args.chunking_strategy}_{span_dir}_{retrieval_status}_{prot_status}_{trial.number}"
+            name = f"{args.backbone_name}_{args.job_id}_{args.task}_{args.chunking_strategy}_{span_dir}_{retrieval_status}_{prot_status}_{trial.number}"
+            tags = [args.version,args.task,args.backbone_name,'hparams',args.chunking_strategy,prot_status, 'uniform']            
+        else:
+            version = f"{args.backbone_name}_{args.job_id}_{args.task}_{args.chunking_strategy}_{span_dir}_{prot_status}_{trial.number}"
+            name = f"{args.backbone_name}_{args.job_id}_{args.task}_{args.chunking_strategy}_{span_dir}_{prot_status}_{trial.number}"
+            tags = [args.version,args.task,args.backbone_name,'hparams',args.chunking_strategy,prot_status]
+
+        wandb_logger = WandbLogger(project=args.project_name,
+                                   save_dir=args.wandb_log_dir,
+                                   version=version,
+                                   name=name,
+                                   tags=tags) 
+        
+        run_dir = get_run_dir(wandb_logger)         
+        ckpt_dir = os.path.join(run_dir, "ckpt")
+        make_dir(ckpt_dir)
+        prediction_csv_path = os.path.join(ckpt_dir,"test_predictions.csv")
 
         if args.benchmark == "mimic":
             train_dataset = RetrievalDataset(data_idx_path=args.data_idx_path,
@@ -219,7 +220,7 @@ def objective(trial: optuna.trial.Trial) -> float:
                                             use_numeric= True,
                                             add_cls=True,
                                             window_hours= window_hours,
-                                            uniform_retrieval=True,
+                                            uniform_retrieval=args.uniform,
                                             split= 'train')
             
             val_dataset = RetrievalDataset(data_idx_path=args.data_idx_path,
@@ -240,9 +241,8 @@ def objective(trial: optuna.trial.Trial) -> float:
                                             use_numeric= True,
                                             add_cls=True,
                                             window_hours= window_hours,
-                                            uniform_retrieval=True,
+                                            uniform_retrieval=args.uniform,
                                             split= 'tuning')
-
             test_dataset = RetrievalDataset(data_idx_path=args.data_idx_path,
                                             dataset_path= args.data_path,
                                             vectordb_path=f"/faiss/{args.seq_length_q}/{args.chunking_strategy}/{span_dir}/{window}",
@@ -261,13 +261,13 @@ def objective(trial: optuna.trial.Trial) -> float:
                                             use_numeric= True,
                                             add_cls=True,
                                             window_hours= window_hours,
-                                            uniform_retrieval=True,
+                                            uniform_retrieval=args.uniform,
                                             split= 'held_out')
         
             chunk_collator = EvalCollator(tokenizer=train_dataset.query_gen.tokenizer,
                                         use_mask_augmentation= True if use_augmentation == 1 else False,
-                                        augment_prob=0.25,
-                                        mask_prob=0.125,
+                                        augment_prob=0.0,
+                                        mask_prob=0.0,
                                         )
             retrieval_collator = RetrievalCollator(chunk_collator=chunk_collator, top_k=top_k)
 
@@ -306,19 +306,18 @@ def objective(trial: optuna.trial.Trial) -> float:
                                     usage_ent_lambda=usage_lambda,
                                     use_prototypes=args.use_prototypes,
                                     # fusion
-                                    fusion_layers=2,
-                                    fusion_heads=4,
+                                    fusion_layers=4 if args.variant == "hibehrt" else 2,
+                                    fusion_heads=6 if args.variant == "hibehrt" else 4,
                                     fusion_ff_mult=4,
                                     fusion_output_mode=pooling_fuse,
                                     use_weights_as_gating=True,
                                     prediction_csv_path = prediction_csv_path)
             
         elif args.benchmark == "ehrshot": 
-            task = 'lupus' # pay attention for this
             train_dataset =  CLMBRRetrievalDataset(dataset_path=args.data_path,
                                                     data_idx_path=args.data_idx_path,
-                                                    vectordb_path=f"./data/faiss_clmbr/{args.seq_length_q}/{args.chunking_strategy}/{span_dir}/{task}",
-                                                    task=task,
+                                                    vectordb_path=f"./data/faiss_clmbr/{args.seq_length_q}/{args.chunking_strategy}/{span_dir}/{args.task}",
+                                                    task=args.task,
                                                     split="train",
                                                     top_k=top_k,
                                                     query_length=args.seq_length_q,
@@ -328,9 +327,20 @@ def objective(trial: optuna.trial.Trial) -> float:
 
             val_dataset =  CLMBRRetrievalDataset(dataset_path=args.data_path,
                                                  data_idx_path=args.data_idx_path,
-                                                 vectordb_path=f"./data/faiss_clmbr/{args.seq_length_q}/{args.chunking_strategy}/{span_dir}/{task}",
-                                                 task=task,
+                                                 vectordb_path=f"./data/faiss_clmbr/{args.seq_length_q}/{args.chunking_strategy}/{span_dir}/{args.task}",
+                                                 task=args.task,
                                                  split="val",
+                                                 top_k=top_k,
+                                                 query_length=args.seq_length_q,
+                                                 history_chunk_length=seq_length_h,
+                                                 history_overlap=overlap_h,
+                                                 chunking_strategy=args.chunking_strategy)
+
+            test_dataset =  CLMBRRetrievalDataset(dataset_path=args.data_path,
+                                                 data_idx_path=args.data_idx_path,
+                                                 vectordb_path=f"./data/faiss_clmbr/{args.seq_length_q}/{args.chunking_strategy}/{span_dir}/{args.task}",
+                                                 task=args.task,
+                                                 split="test",
                                                  top_k=top_k,
                                                  query_length=args.seq_length_q,
                                                  history_chunk_length=seq_length_h,
@@ -346,7 +356,7 @@ def objective(trial: optuna.trial.Trial) -> float:
             clmbr_model = femr.models.transformer.FEMRModel.from_pretrained(model_name)
             for p in clmbr_model.parameters():
                 p.requires_grad = True
-            tokenizer = femr.models.tokenizer.FEMRTokenizer(dictionary=dictionary,ontology=None)
+            # tokenizer = femr.models.tokenizer.FEMRTokenizer(dictionary=dictionary,ontology=None)
             # batch_processor = femr.models.processor.FEMRBatchProcessor(tokenizer)
 
             model = CLMBRRAPEvalModel(clmbr_model=clmbr_model,
@@ -374,53 +384,46 @@ def objective(trial: optuna.trial.Trial) -> float:
                                         fusion_output_mode= pooling_fuse,
                                         use_weights_as_gating= True,
                                       )
-            args.task = task
 
         train_dataloader = DataLoader(dataset=train_dataset,
                                       batch_size=batch_size,
                                       shuffle=True,
                                       collate_fn=retrieval_collator,
-                                      num_workers=4,
+                                      num_workers=12,
                                       prefetch_factor=2,
                                       persistent_workers=True,
                                       pin_memory=True,
-                                      pin_memory_device='cuda',
                                       ) 
         
         val_dataloader = DataLoader(dataset=val_dataset,
                                     batch_size=batch_size,
                                     shuffle=True,
                                     collate_fn=retrieval_collator,
-                                    num_workers=4,
+                                    num_workers=12,
                                     prefetch_factor=2,
                                     persistent_workers=True,
                                     pin_memory=True,
-                                    pin_memory_device='cuda',
                                     )
-
-
         test_dataloader = DataLoader(dataset=test_dataset,
                                     batch_size=batch_size,
                                     shuffle=True,
                                     collate_fn=retrieval_collator,
-                                    num_workers=4,
+                                    num_workers=12,
                                     prefetch_factor=2,
                                     persistent_workers=True,
                                     pin_memory=True,
-                                    pin_memory_device='cuda',
-                                    ) 
+                                    )
  
-        
         checkpoint_callback = ModelCheckpoint(dirpath=ckpt_dir,
-                                                monitor='val_auroc',
-                                                mode='max',
+                                                monitor='val_loss',
+                                                mode='min',
                                                 every_n_epochs=1,
                                                 save_top_k=1)
 
-        early_stop = EarlyStopping(monitor='val_auroc',
+        early_stop = EarlyStopping(monitor='val_loss',
                                    min_delta=0.001,
-                                   mode='max', 
-                                   patience=4)
+                                   mode='min', 
+                                   patience=6)
 
         lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
@@ -434,7 +437,7 @@ def objective(trial: optuna.trial.Trial) -> float:
             precision = '32-true'
         trainer = lt.Trainer(accelerator='gpu', 
                             devices='auto',
-                            strategy='ddp_find_unused_parameters_true',
+                            strategy='auto',
                             logger=wandb_logger, 
                             log_every_n_steps=1,
                             num_sanity_val_steps=0,
@@ -444,6 +447,13 @@ def objective(trial: optuna.trial.Trial) -> float:
                             )
 
         trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
+        best_ckpt = checkpoint_callback.best_model_path
+        print("Using best ckpt:", best_ckpt)
+        print("Best val score:", checkpoint_callback.best_model_score)
+
+        assert best_ckpt and os.path.exists(best_ckpt)
+
+        trainer.test(model=model, dataloaders=test_dataloader, ckpt_path=best_ckpt,weights_only=False)
 
     except optuna.exceptions.TrialPruned:
         wandb.finish()
@@ -456,24 +466,22 @@ def objective(trial: optuna.trial.Trial) -> float:
 def main():
     pruner = optuna.pruners.NopPruner() 
     prot_status = "with_proto" if args.use_prototypes else "without_proto"
+    retrieval_status = "uniform" if args.uniform else None
 
-    # if args.backbone_name == 'clmbr':
-    #     args.task = os.getenv('TASK')
-    
     if args.variant is not None:
-        db_path = f'sqlite:////scratch/sas10092/ehr-foundation/models/optuna_dbs/{args.backbone_name}_{args.variant}_{prot_status}_{args.task}_{args.span}_{args.chunking_strategy}.db'
-        # db_path = f'sqlite:////scratch/sas10092/ehr-foundation/models/optuna_dbs/2_{args.backbone_name}_{args.variant}_{prot_status}_{args.task}_{args.span}_{args.chunking_strategy}.db'
+        db_path = f'sqlite:////scratch/sas10092/ehr-foundation/models/ehr_ragp_dbs/{args.backbone_name}_{args.variant}_{prot_status}_{args.task}_{args.span}_{args.chunking_strategy}.db'
 
+    elif args.uniform:
+        db_path = f'sqlite:////scratch/sas10092/ehr-foundation/models/ehr_ragp_dbs/{args.backbone_name}_{retrieval_status}_{prot_status}_{args.task}_{args.span}_{args.chunking_strategy}.db'
     else:
-        varint = None
-        db_path = f'sqlite:////scratch/sas10092/ehr-foundation/models/optuna_dbs/{args.backbone_name}_{prot_status}_{args.task}_{args.span}_{args.chunking_strategy}.db'
-        # db_path = f'sqlite:////scratch/sas10092/ehr-foundation/models/optuna_dbs/{args.backbone_name}_{prot_status}_{args.task}_{args.span}_{args.chunking_strategy}.db'
+        args.variant = None
+        db_path = f'sqlite:////scratch/sas10092/ehr-foundation/models/ehr_ragp_dbs/{args.backbone_name}_{prot_status}_{args.task}_{args.span}_{args.chunking_strategy}.db'
 
     study = optuna.create_study(study_name=args.backbone_name,
-                                direction="maximize", 
+                                direction="minimize", 
                                 storage=db_path,
                                 pruner=pruner,
-                                sampler=TPESampler(),
+                                sampler=TPESampler(n_startup_trials=5),
                                 load_if_exists=True)
 
     study.optimize(objective, n_trials=100,show_progress_bar=True,gc_after_trial=True)

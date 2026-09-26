@@ -25,7 +25,7 @@ print(model_name)
 hf_token = os.getenv("HF_TOKEN")
 dataset = load_from_disk(args.dataset_path)
 
-window = 'within_stay_genhpf'
+window = 'within_stay_descemb'
 task = 'y_mort_12mo'
 print('Running task: ', task)
 bundle = load_hf_model(model_name=model_name, hf_token=hf_token)
@@ -38,7 +38,7 @@ torch.cuda.empty_cache()
 print('Finished task: ', task)
 
 
-window = 'within_stay_genhpf'
+window = 'within_stay_descemb'
 task = 'y_icu_readmit_30'
 print('Running task: ', task)
 bundle = load_hf_model(model_name=model_name, hf_token=hf_token)
@@ -51,7 +51,7 @@ torch.cuda.empty_cache()
 print('Finished task: ', task)
 
 
-window = 'within48_genhpf'
+window = 'within48_descemb'
 task = 'y_mort'
 print('Running task: ', task)
 bundle = load_hf_model(model_name=model_name, hf_token=hf_token)
@@ -64,7 +64,7 @@ torch.cuda.empty_cache()
 print('Finished task: ', task)
 
 
-window = 'within24_genhpf'
+window = 'within24_descemb'
 task = 'y_los_7'
 print('Running task: ', task)
 bundle = load_hf_model(model_name=model_name, hf_token=hf_token)

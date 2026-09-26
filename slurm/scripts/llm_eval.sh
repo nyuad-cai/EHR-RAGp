@@ -7,11 +7,11 @@
 #SBATCH  -c 16
 #SBATCH  -o ./slurm/logs/%x.%J.out
 #SBATCH  -e ./slurm/logs/%x.%J.err
-#SBATCH  --gres=gpu:h200:1
+#SBATCH  --gres=gpu:a100:1
 
-##SBATCH  --constraint=80g
+#SBATCH  --constraint=80g
 ##SBATCH -q cair
-#SBATCH -q shamout
+##SBATCH -q shamout
 ##SBATCH  -q nvidia-xxl
 
 
@@ -37,8 +37,9 @@ export CXX="/share/apps/NYUAD5/gcc/9.2.0/bin/g++"
 
 # google/medgemma-1.5-4b-it
 # BioMistral/BioMistral-7B
+MODEL_NAME=BioMistral/BioMistral-7B
 python llm_eval.py \
-  --model-name google/medgemma-1.5-4b-it \
+  --model-name $MODEL_NAME \
   --dataset-path ./data/llm-dataset \
   --data-idx-path ./resources/downstream_index.parquet \
   --split held_out

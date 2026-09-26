@@ -1,5 +1,9 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda",
-    "python.analysis.languageServerMode": "default"
+    "python.analysis.languageServerMode": "default",
+    "files.watcherExclude": {
+        "**/data/faiss_clmbr/**": true,
+        "**/models/**": true
+    }
 }

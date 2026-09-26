@@ -8,12 +8,12 @@
 #SBATCH  -c 16
 #SBATCH  -o ./slurm/logs/%x.%J.out
 #SBATCH  -e ./slurm/logs/%x.%J.err
-#SBATCH  --gres=gpu:h100:1
+#SBATCH  --gres=gpu:h200:4
 
 
 ##SBATCH  --constraint=80g
-##SBATCH -q shamout
-#SBATCH -q cair
+#SBATCH -q shamout
+##SBATCH -q cair
 ##SBATCH -q nvidia-xxl
 
 
@@ -22,19 +22,19 @@
 
 
 export TOKENIZER_PATH="./resources/vocab.json"
-# export DATA_PATH="./data/meds_normalized_arrow"
+export DATA_PATH="./data/meds_normalized_arrow"
 
-# export DATA_IDX_PATH="./resources/pretrain_index.parquet"
+export DATA_IDX_PATH="./resources/pretrain_index.parquet"
 
 export WANDB_API_KEY="59b6438e0496b3089f91abef35d31dae69b6c009"
 export LOG_DIR="./models/pretraining/"
 
 export VERSION="15_maskprob_12.5overlap"
-export PRETRAIN_MODE="simclr"
+export PRETRAIN_MODE="mlm"
 
 
-export DATA_PATH="./data/desc_gen_dataset/"
-export DATA_IDX_PATH="./resources/downstream_index.parquet"
+# export DATA_PATH_GENHPF="./data/desc_gen_dataset/"
+# export DATA_IDX_PATH_GENHPF="./resources/downstream_index.parquet"
 
 
 
@@ -56,15 +56,15 @@ set -x
 #     --overlap 64 
 
 
-export BACKBONE="genhpf_simclr"
-export BASELINE="genhpf"
-torchrun --nproc_per_node=1 pretrain.py \
-    --learning-rate 1e-4 \
-    --weight-decay 1e-2 \
-    --max-epochs 100 \
-    --batch-size 64 \
-    --chunk-length 510 \
-    --overlap 0 
+# export BACKBONE="genhpf_simclr"
+# export BASELINE="genhpf"
+# torchrun --nproc_per_node=1 pretrain.py \
+#     --learning-rate 1e-4 \
+#     --weight-decay 1e-2 \
+#     --max-epochs 100 \
+#     --batch-size 64 \
+#     --chunk-length 510 \
+#     --overlap 0 
 
 
 
@@ -116,15 +116,15 @@ torchrun --nproc_per_node=1 pretrain.py \
 #     --overlap 128
 
 
-# export BACKBONE="roformer"
-# export BASELINE="transformer"
-# torchrun --nproc_per_node=1 pretrain.py \
-#     --learning-rate 1e-5 \
-#     --weight-decay 1e-2 \
-#     --max-epochs 100 \
-#     --batch-size 8 \
-#     --chunk-length 1024 \
-#     --overlap 128
+export BACKBONE="roformer"
+export BASELINE="transformer"
+torchrun --nproc_per_node=4 pretrain.py \
+    --learning-rate 1e-5 \
+    --weight-decay 1e-2 \
+    --max-epochs 100 \
+    --batch-size 32 \
+    --chunk-length 1024 \
+    --overlap 128
 
 
 # export BACKBONE="mamba"

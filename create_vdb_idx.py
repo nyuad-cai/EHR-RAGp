@@ -35,7 +35,7 @@ windows = [
 history_settings = [
     {'chunking_strategy': 'overlap', 'seq_length_h': 256,  'overlap_h': 32,  'window_hours': 6.0},
     {'chunking_strategy': 'overlap', 'seq_length_h': 512,  'overlap_h': 64,  'window_hours': 6.0},
-    {'chunking_strategy': 'overlap', 'seq_length_h': 1024, 'overlap_h': 128, 'window_hours': 6.0},
+    # {'chunking_strategy': 'overlap', 'seq_length_h': 1024, 'overlap_h': 128, 'window_hours': 6.0},
     {'chunking_strategy': 'time',    'seq_length_h': 256,  'overlap_h': 0,   'window_hours': 6.0},
     {'chunking_strategy': 'time',    'seq_length_h': 256,  'overlap_h': 0,   'window_hours': 12.0},
     {'chunking_strategy': 'time',    'seq_length_h': 256,  'overlap_h': 0,   'window_hours': 24.0},

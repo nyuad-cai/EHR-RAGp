@@ -646,8 +646,8 @@ class EvalModel(lt.LightningModule):
                     "hadm_id": gathered_hadm_ids.cpu().numpy(),
                     "icustay_id": gathered_icustay_ids.cpu().numpy(),
                     "label": gathered_y.cpu().numpy(),
-                    "prediction": gathered_pos_score.cpu().numpy(),
-                    "logit": gathered_logits.cpu().numpy(),
+                    "prediction": gathered_pos_score.float().cpu().numpy(),
+                    "logit": gathered_logits.float().cpu().numpy(),
                 }
             )
 
@@ -1148,18 +1148,27 @@ class FusionModule(nn.Module):
         self.use_weights_as_gating = use_weights_as_gating
         self.output_mode = output_mode
         self.return_seq = return_seq
-
+        #hi-behrt settings
+        if num_layers == 4 and num_heads == 6:
+            intermediate_size = 108
+            hidden_dropout = 0.2
+            attention_dropout = 0.3
+        else:
+            intermediate_size = ff_mult * hidden_size
+            hidden_dropout = dropout
+            attention_dropout = dropout
+            
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=hidden_size,
             nhead=num_heads,
-            dim_feedforward=ff_mult * hidden_size,
-            dropout=dropout,
+            dim_feedforward=intermediate_size,
+            dropout=hidden_dropout,
             activation="gelu",
             batch_first=True, 
             norm_first=False,
         )
+        encoder_layer.self_attn.dropout = attention_dropout
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers,)
-
         self.out_norm = nn.LayerNorm(hidden_size)
         # self.hist_score_proj = nn.Linear(hidden_size, hidden_size)
 
@@ -1667,8 +1676,8 @@ class EHRRAPEvalModel(lt.LightningModule):
                     "hadm_id": gathered_hadm_ids.cpu().numpy(),
                     "icustay_id": gathered_icustay_ids.cpu().numpy(),
                     "label": gathered_y.cpu().numpy(),
-                    "prediction": gathered_pos_score.cpu().numpy(),
-                    "logit": gathered_logits.cpu().numpy(),
+                    "prediction": gathered_pos_score.float().cpu().numpy(),
+                    "logit": gathered_logits.cpu().float().numpy(),
                 }
             )
 

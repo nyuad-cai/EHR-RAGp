@@ -4,6 +4,7 @@ import wandb
 import optuna
 import argparse
 
+import polars as pl
 import lightning.pytorch as lt
 
 from types import SimpleNamespace
@@ -26,7 +27,7 @@ from src.models.utils import get_config_and_model_cls, fix_roberta_longformer_ma
 
 
 
-parser = argparse.ArgumentParser(description='MLM pretraining command line interface')
+parser = argparse.ArgumentParser(description='baselines command line interface')
 
 # backbone / experiment
 parser.add_argument("--backbone-name", type=str, default=None)
@@ -61,7 +62,7 @@ parser.add_argument("--use-stage", action="store_true")
 parser.add_argument("--use-visit", action="store_true")
 parser.add_argument("--use-type", action="store_true")
 # run mode
-parser.add_argument("--run-mode", type=str, default='hparams',choices=['hparams'])
+parser.add_argument("--run-mode", type=str, default='hparams',choices=['hparams','eval'])
 args = parser.parse_args()
 
 
@@ -622,7 +623,7 @@ if args.run_mode == 'hparams':
                                         collate_fn=collate_fn,
                                         pin_memory=True,
                                         persistent_workers=True,
-                                        pin_memory_device='cuda',
+                                        # pin_memory_device='cuda',
                                         prefetch_factor=4)
             val_dataloader = DataLoader(dataset=val_dataset,
                                         batch_size=args.batch_size,
@@ -631,19 +632,14 @@ if args.run_mode == 'hparams':
                                         collate_fn=collate_fn,
                                         pin_memory=True,
                                         persistent_workers=True,
-                                        pin_memory_device='cuda',
+                                        # pin_memory_device='cuda',
                                         prefetch_factor=4)
 
 
-            # checkpoint_callback = ModelCheckpoint(dirpath=ckpt_dir,
-            #                                         monitor='val_loss',
-            #                                         mode='min',
-            #                                         every_n_epochs=1,
-            #                                         save_top_k=1)
             early_stop = EarlyStopping(monitor='val_loss',
                                     min_delta=0.001,
                                     mode='min', 
-                                    patience=5)
+                                    patience=4)
 
             lr_monitor = LearningRateMonitor(logging_interval='epoch')
             torch.set_float32_matmul_precision('high')
@@ -662,8 +658,8 @@ if args.run_mode == 'hparams':
                                 num_sanity_val_steps=0,
                                 max_epochs=75,
                                 precision=precision,
-                                callbacks=[early_stop,lr_monitor],#, checkpoint_callback],
-                                enable_checkpointing=True
+                                callbacks=[early_stop,lr_monitor],
+                                enable_checkpointing=False
                                 )
             trainer.logger.log_hyperparams(hparams)
             trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
@@ -683,24 +679,30 @@ if args.run_mode == 'hparams':
                                 storage=f'sqlite:////scratch/sas10092/ehr-foundation/models/optuna_dbs/{args.backbone_name}_{mode}_{args.task}.db',
                                 pruner=pruner,
                                 load_if_exists=True,
-                                sampler=TPESampler())
+                                sampler=TPESampler(n_startup_trials=5))
 
     study.optimize(objective, n_trials=25,show_progress_bar=True,gc_after_trial=True)
 
 
 
 elif args.run_mode == 'eval':
-    learning_rate = 0.000269016592023212
-    weight_decay = 0.0014355353210248
-    dropout = 0.1
+    lt.seed_everything(24, workers=True)
+    best_trials = pl.read_csv('./resources/best_trials.csv')
+    best_trials = best_trials.filter(pl.col('backbone_name') == args.backbone_name)
+    best_trials = best_trials.filter(pl.col('task') == args.task)
 
     if args.backbone_name == 'descemb':
         mode = 'cls-ft' if args.freeze else 'bert-ft'
+        best_trials = best_trials.filter(pl.col('variant') == mode)
     elif args.variant is not None:
         mode = args.variant
+        best_trials = best_trials.filter(pl.col('variant') == mode)
     else:
         mode = 'base'
-
+    print(best_trials)
+    learning_rate = best_trials['learning_rate'][0]
+    weight_decay = best_trials['weight_decay'][0]
+    dropout = best_trials['dropout'][0]
 
     wandb.login(key=args.wandb_api_key)
 
@@ -717,8 +719,8 @@ elif args.run_mode == 'eval':
 
     if args.backbone_name == 'bert' and args.variant == 'hibehrt':
         ConfigClass, ModelClass = get_config_and_model_cls(args.backbone_name, mode='eval', variant='hibehrt')
-        learning_rate = learning_rate
-        hparams={'learning_rate': learning_rate}
+        hparams={'learning_rate': learning_rate,
+                'weight_decay': weight_decay}
 
         seq_gen = SequencesGenerator(tokenizer_path=args.tokenizer_path,
                                     chunk_length=args.seq_length,
@@ -767,9 +769,9 @@ elif args.run_mode == 'eval':
                                     use_stage=args.use_stage,
                                     split='held_out')
         collate_fn = HiBEHRTEvalCollator(seq_gen=seq_gen,
-                                            chunk_length=256,
-                                            overlap=32,
-                                            add_cls_per_chunk=True)
+                                        chunk_length=256,
+                                        overlap=32,
+                                        add_cls_per_chunk=True)
         cfg = ConfigClass(
             vocab_size=seq_gen.tokenizer.vocab_size,
             cls_token_id=seq_gen.tokenizer.cls_id,
@@ -780,28 +782,29 @@ elif args.run_mode == 'eval':
             refernece_compile=False)
         
         model = HiBEHRTModule(config=cfg,
-                                backbone=ModelClass,
-                                ckpt_path=args.ckpt_path,
-                                lr=learning_rate,
-                                max_epochs=75,
-                                freeze=False,
-                                pooling='mean',
-                                dropout=0.1,
-                                optimizer='sgd',
-                                use_time=args.use_time,
-                                use_numeric=args.use_numeric,
-                                use_type=args.use_type,
-                                use_visit=args.use_visit, 
-                                use_stage=args.use_stage,
-                                prediction_csv_path=prediction_csv_path)
+                            backbone=ModelClass,
+                            ckpt_path=args.ckpt_path,
+                            lr=learning_rate,
+                            wd=weight_decay,
+                            max_epochs=75,
+                            freeze=False,
+                            pooling='mean',
+                            dropout=0.1,
+                            optimizer='sgd',
+                            use_time=args.use_time,
+                            use_numeric=args.use_numeric,
+                            use_type=args.use_type,
+                            use_visit=args.use_visit, 
+                            use_stage=args.use_stage,
+                            prediction_csv_path=prediction_csv_path)
         
     elif args.backbone_name in 'bert' and args.variant == 'medbert':
         ConfigClass, ModelClass = get_config_and_model_cls(args.backbone_name, mode='eval', variant=args.variant)
-        learning_rate = learning_rate
+        hparams={'learning_rate': learning_rate,
+                'weight_decay': weight_decay}
         seq_gen = SequencesGenerator(tokenizer_path=args.tokenizer_path,
                                         chunk_length=args.seq_length,
                                         overlap=args.seq_overlap)
-        hparams={'learning_rate': learning_rate}
         collate_fn = EvalCollator()
         train_dataset = EvalDataset(dataset_path=args.data_path,
                                     data_idx_path=args.data_idx_path,
@@ -851,27 +854,28 @@ elif args.run_mode == 'eval':
             stage_vocab_size=5,
             refernece_compile=False)
         model = EvalModel(config=cfg,
-                            backbone=ModelClass,
-                            ckpt_path=args.ckpt_path,
-                            lr=learning_rate,
-                            max_epochs=75,
-                            pooling='cls',
-                            use_numeric=args.use_numeric,
-                            use_time=args.use_time,
-                            use_type=args.use_type,
-                            use_visit=args.use_visit, 
-                            use_stage=args.use_stage,
-                            freeze=False,
-                            optimizer='sgd',
-                            prediction_csv_path=prediction_csv_path)
+                        backbone=ModelClass,
+                        ckpt_path=args.ckpt_path,
+                        lr=learning_rate,
+                        wd=weight_decay,
+                        max_epochs=75,
+                        pooling='cls',
+                        use_numeric=args.use_numeric,
+                        use_time=args.use_time,
+                        use_type=args.use_type,
+                        use_visit=args.use_visit, 
+                        use_stage=args.use_stage,
+                        freeze=False,
+                        optimizer='sgd',
+                        prediction_csv_path=prediction_csv_path)
         
     elif args.backbone_name in 'bert' and args.variant == 'behrt':
         ConfigClass, ModelClass = get_config_and_model_cls(args.backbone_name, mode='eval', variant=args.variant)
-        learning_rate = learning_rate
+        hparams={'learning_rate': learning_rate,
+                'weight_decay': weight_decay}
         seq_gen = SequencesGenerator(tokenizer_path=args.tokenizer_path,
                                         chunk_length=args.seq_length,
                                         overlap=args.seq_overlap)
-        hparams={'learning_rate': learning_rate}
         collate_fn = EvalCollator()
         train_dataset = EvalDataset(dataset_path=args.data_path,
                                     data_idx_path=args.data_idx_path,
@@ -911,8 +915,7 @@ elif args.run_mode == 'eval':
                                     use_type=args.use_type,
                                     use_visit=args.use_visit, 
                                     use_stage=args.use_stage,
-                                    split='held_out')
-        
+                                    split='held_out')        
         cfg = ConfigClass(
             vocab_size=seq_gen.tokenizer.vocab_size,
             cls_token_id=seq_gen.tokenizer.cls_id,
@@ -922,27 +925,28 @@ elif args.run_mode == 'eval':
             stage_vocab_size=5,
             refernece_compile=False)
         model = EvalModel(config=cfg,
-                            backbone=ModelClass,
-                            ckpt_path=args.ckpt_path,
-                            lr=learning_rate,
-                            max_epochs=75,
-                            pooling='cls',
-                            use_numeric=args.use_numeric,
-                            use_time=args.use_time,
-                            use_type=args.use_type,
-                            use_visit=args.use_visit, 
-                            use_stage=args.use_stage,
-                            freeze=False,
-                            optimizer='sgd',
-                            prediction_csv_path=prediction_csv_path)
+                        backbone=ModelClass,
+                        ckpt_path=args.ckpt_path,
+                        lr=learning_rate,
+                        wd=weight_decay,
+                        max_epochs=75,
+                        pooling='cls',
+                        use_numeric=args.use_numeric,
+                        use_time=args.use_time,
+                        use_type=args.use_type,
+                        use_visit=args.use_visit, 
+                        use_stage=args.use_stage,
+                        freeze=False,
+                        optimizer='sgd',
+                        prediction_csv_path=prediction_csv_path)
         
     elif args.backbone_name in 'bert' and args.variant == 'cehrbert':
         ConfigClass, ModelClass = get_config_and_model_cls(args.backbone_name, mode='eval', variant=args.variant)
-        learning_rate = learning_rate
+        hparams={'learning_rate': learning_rate,
+                'weight_decay': weight_decay}
         seq_gen = SequencesGenerator(tokenizer_path=args.tokenizer_path,
                                         chunk_length=args.seq_length,
                                         overlap=args.seq_overlap)
-        hparams={'learning_rate': learning_rate}
         collate_fn = EvalCollator()
         train_dataset = EvalDataset(dataset_path=args.data_path,
                                     data_idx_path=args.data_idx_path,
@@ -992,27 +996,28 @@ elif args.run_mode == 'eval':
             stage_vocab_size=5,
             refernece_compile=False)
         model = EvalModel(config=cfg,
-                            backbone=ModelClass,
-                            ckpt_path=args.ckpt_path,
-                            lr=learning_rate,
-                            max_epochs=75,
-                            pooling='cls',
-                            use_numeric=args.use_numeric,
-                            use_time=args.use_time,
-                            use_type=args.use_type,
-                            use_visit=args.use_visit, 
-                            use_stage=args.use_stage,
-                            freeze=False,
-                            optimizer='sgd',
-                            prediction_csv_path=prediction_csv_path)   
+                        backbone=ModelClass,
+                        ckpt_path=args.ckpt_path,
+                        lr=learning_rate,
+                        wd=weight_decay,
+                        max_epochs=75,
+                        pooling='cls',
+                        use_numeric=args.use_numeric,
+                        use_time=args.use_time,
+                        use_type=args.use_type,
+                        use_visit=args.use_visit, 
+                        use_stage=args.use_stage,
+                        freeze=False,
+                        optimizer='sgd',
+                        prediction_csv_path=prediction_csv_path)   
 
     elif args.backbone_name == 'mamba':
         ConfigClass, ModelClass = get_config_and_model_cls(args.backbone_name, mode='eval', variant=None)
-        learning_rate = learning_rate
+        hparams={'learning_rate': learning_rate,
+                'weight_decay': weight_decay}
         seq_gen = SequencesGenerator(tokenizer_path=args.tokenizer_path,
                                         chunk_length=args.seq_length,
                                         overlap=args.seq_overlap)
-        hparams={'learning_rate': learning_rate}
         collate_fn = EvalCollator()
         train_dataset = EvalDataset(dataset_path=args.data_path,
                                     data_idx_path=args.data_idx_path,
@@ -1062,29 +1067,27 @@ elif args.run_mode == 'eval':
             stage_vocab_size=5,
             refernece_compile=False)
         model = EvalModel(config=cfg,
-                            backbone=ModelClass,
-                            ckpt_path=args.ckpt_path,
-                            lr=learning_rate,
-                            wd=0.0,
-                            max_epochs=75,
-                            pooling='cls',
-                            use_numeric=args.use_numeric,
-                            use_time=args.use_time,
-                            use_type=args.use_type,
-                            use_visit=args.use_visit, 
-                            use_stage=args.use_stage,
-                            freeze=False,
-                            optimizer='sgd',
-                            prediction_csv_path=prediction_csv_path)
+                        backbone=ModelClass,
+                        ckpt_path=args.ckpt_path,
+                        lr=learning_rate,
+                        wd=weight_decay,
+                        max_epochs=75,
+                        pooling='cls',
+                        use_numeric=args.use_numeric,
+                        use_time=args.use_time,
+                        use_type=args.use_type,
+                        use_visit=args.use_visit, 
+                        use_stage=args.use_stage,
+                        freeze=False,
+                        optimizer='sgd',
+                        prediction_csv_path=prediction_csv_path)
     elif args.backbone_name in ['roberta','longformer','big_bird','roformer','modernbert']:
         ConfigClass, ModelClass = get_config_and_model_cls(args.backbone_name, mode='eval', variant=None)
-        learning_rate = learning_rate
-        weight_decay = weight_decay
+        hparams={'learning_rate': learning_rate,
+                'weight_decay': weight_decay}
         seq_gen = SequencesGenerator(tokenizer_path=args.tokenizer_path,
                                         chunk_length=args.seq_length,
                                         overlap=args.seq_overlap)
-        hparams={'learning_rate': learning_rate,
-                'weight_decay': weight_decay}
         collate_fn = EvalCollator()
         train_dataset = EvalDataset(dataset_path=args.data_path,
                                     data_idx_path=args.data_idx_path,
@@ -1139,26 +1142,24 @@ elif args.run_mode == 'eval':
             refernece_compile=False)
         cfg = fix_roberta_longformer_max_pos(cfg)
         model = EvalModel(config=cfg,
-                            backbone=ModelClass,
-                            ckpt_path=args.ckpt_path,
-                            lr=learning_rate,
-                            wd=weight_decay,
-                            max_epochs=75,
-                            pooling='cls',
-                            use_numeric=args.use_numeric,
-                            use_time=args.use_time,
-                            use_type=args.use_type,
-                            use_visit=args.use_visit, 
-                            use_stage=args.use_stage,
-                            freeze=False,
-                            optimizer='sgd',
-                            prediction_csv_path=prediction_csv_path)
+                        backbone=ModelClass,
+                        ckpt_path=args.ckpt_path,
+                        lr=learning_rate,
+                        wd=weight_decay,
+                        max_epochs=75,
+                        pooling='cls',
+                        use_numeric=args.use_numeric,
+                        use_time=args.use_time,
+                        use_type=args.use_type,
+                        use_visit=args.use_visit, 
+                        use_stage=args.use_stage,
+                        freeze=False,
+                        optimizer='sgd',
+                        prediction_csv_path=prediction_csv_path)
         
     elif args.backbone_name == 'descemb':
-        learning_rate = learning_rate
-        dropout = dropout
         hparams={'learning_rate': learning_rate,
-                    'dropout': dropout}
+                'dropout': dropout}
         train_dataset = DescEmbDataset(dataset_path=args.data_path,
                                     data_idx_path=args.data_idx_path,
                                     task=args.task,
@@ -1179,15 +1180,15 @@ elif args.run_mode == 'eval':
                                     main_window=args.main_window,
                                     max_word_len=12,
                                     max_events=510,
-                                    split='held_out') 
+                                    split='held_out')
         collate_fn = DescEmbCollator(pad_token_id=train_dataset.tokenizer.pad_token_id)
         cfg = SimpleNamespace(bert_model_name="google/bert_uncased_L-2_H-128_A-2",
-                                pred_embed_dim=128,
-                                pred_hidden_dim=256,     
-                                max_event_len=510,       
-                                rnn_layer=1,
-                                init_bert_random=False,  
-                                task="binary")
+                            pred_embed_dim=128,
+                            pred_hidden_dim=256,     
+                            max_event_len=510,       
+                            rnn_layer=1,
+                            init_bert_random=False,  
+                            task="binary")
         model = DescEmbEvalModel(config=cfg,
                                 lr=learning_rate,
                                 max_epochs=75,
@@ -1195,10 +1196,8 @@ elif args.run_mode == 'eval':
                                 freeze=args.freeze,
                                 prediction_csv_path=prediction_csv_path)
     elif args.backbone_name in ['genhpf']:
-        learning_rate = learning_rate
-        dropout = dropout
         hparams={'learning_rate': learning_rate,
-                    'dropout': dropout}
+                'dropout': dropout}
         train_dataset = HierarchicalGenHPFDataset(
             dataset_path=args.data_path,
             data_idx_path=args.data_idx_path,
@@ -1206,7 +1205,7 @@ elif args.run_mode == 'eval':
             label_field=args.task,
             split='train',
             tokenizer_name="emilyalsentzer/Bio_ClinicalBERT",
-            max_events=510,
+            max_events=511,
             max_tokens=64)
         val_dataset = HierarchicalGenHPFDataset(
             dataset_path=args.data_path,
@@ -1215,7 +1214,7 @@ elif args.run_mode == 'eval':
             label_field=args.task,
             split='tuning',
             tokenizer_name="emilyalsentzer/Bio_ClinicalBERT",
-            max_events=510,
+            max_events=511,
             max_tokens=64)
         test_dataset = HierarchicalGenHPFDataset(
             dataset_path=args.data_path,
@@ -1224,7 +1223,7 @@ elif args.run_mode == 'eval':
             label_field=args.task,
             split='held_out',
             tokenizer_name="emilyalsentzer/Bio_ClinicalBERT",
-            max_events=510,
+            max_events=511,
             max_tokens=64)
         collate_fn = GenHPFEvalCollator(pad_token_id=train_dataset.tokenizer.pad_token_id)
         encoder = GenHPFEncoder(vocab_size=train_dataset.tokenizer.vocab_size,
@@ -1239,51 +1238,49 @@ elif args.run_mode == 'eval':
                                 agg_attention_heads=4,
                                 dropout=dropout,
                                 max_token_len=64,   
-                                max_events=510,
+                                max_events=511,
                                 encoder_only=False,
                                 ckpt_path=args.ckpt_path)
         model = GenHPFDownstreamModule(encoder=encoder,
-                                        lr=learning_rate,
-                                        max_epochs=75,
-                                        num_outputs=1,
-                                        pos_weight=1.0,
-                                        prediction_csv_path=prediction_csv_path)
+                                    lr=learning_rate,
+                                    max_epochs=75,
+                                    num_outputs=1,
+                                    pos_weight=1.0,
+                                    prediction_csv_path=prediction_csv_path)
         
     elif args.backbone_name == 'remed':
-        learning_rate = learning_rate
-        weight_decay = weight_decay
         hparams={'learning_rate': learning_rate,
-                    'weight_decay': weight_decay}
+                'weight_decay': weight_decay}
         train_dataset = REMedGenHPFPoolDataset(hf_path=args.data_path,
-                                                data_idx_path=args.data_idx_path,
-                                                seq_field=args.main_window,
-                                                time_field=args.time_field,
-                                                time_diff_field=args.time_diff_field,
-                                                label_field=args.task,
-                                                split='train',
-                                                tokenizer_name="emilyalsentzer/Bio_ClinicalBERT",
-                                                seq_len=510,
-                                                max_tokens=64)
+                                            data_idx_path=args.data_idx_path,
+                                            seq_field=args.main_window,
+                                            time_field=args.time_field,
+                                            time_diff_field=args.time_diff_field,
+                                            label_field=args.task,
+                                            split='train',
+                                            tokenizer_name="emilyalsentzer/Bio_ClinicalBERT",
+                                            seq_len=511,
+                                            max_tokens=64)
         val_dataset = REMedGenHPFPoolDataset(hf_path=args.data_path,
-                                                data_idx_path=args.data_idx_path,
-                                                seq_field=args.main_window,
-                                                time_field=args.time_field,
-                                                time_diff_field=args.time_diff_field,
-                                                label_field=args.task,
-                                                split='tuning',
-                                                tokenizer_name="emilyalsentzer/Bio_ClinicalBERT",
-                                                seq_len=510,
-                                                max_tokens=64)
+                                            data_idx_path=args.data_idx_path,
+                                            seq_field=args.main_window,
+                                            time_field=args.time_field,
+                                            time_diff_field=args.time_diff_field,
+                                            label_field=args.task,
+                                            split='tuning',
+                                            tokenizer_name="emilyalsentzer/Bio_ClinicalBERT",
+                                            seq_len=511,
+                                            max_tokens=64)
         test_dataset = REMedGenHPFPoolDataset(hf_path=args.data_path,
-                                                data_idx_path=args.data_idx_path,
-                                                seq_field=args.main_window,
-                                                time_field=args.time_field,
-                                                time_diff_field=args.time_diff_field,
-                                                label_field=args.task,
-                                                split='held_out',
-                                                tokenizer_name="emilyalsentzer/Bio_ClinicalBERT",
-                                                seq_len=510,
-                                                max_tokens=64)
+                                            data_idx_path=args.data_idx_path,
+                                            seq_field=args.main_window,
+                                            time_field=args.time_field,
+                                            time_diff_field=args.time_diff_field,
+                                            label_field=args.task,
+                                            split='held_out',
+                                            tokenizer_name="emilyalsentzer/Bio_ClinicalBERT",
+                                            seq_len=511,
+                                            max_tokens=64)
         collate_fn = REMedGenHPFCollator(pad_token_id=train_dataset.tokenizer.pad_token_id)
         encoder = GenHPFEncoder(vocab_size=train_dataset.tokenizer.vocab_size,
                                 pad_token_id=train_dataset.tokenizer.pad_token_id,
@@ -1297,53 +1294,55 @@ elif args.run_mode == 'eval':
                                 agg_attention_heads=4,
                                 dropout=0.2,
                                 max_token_len=64,   
-                                max_events=510,
+                                max_events=511,
                                 encoder_only=True,
                                 ckpt_path=args.ckpt_path)
         remed_genhpf = REMedWithGenHPF(genhpf_encoder=encoder,
-                                        pred_dim=512,
-                                        num_classes=1,
-                                        pred_time=args.pred_time,
-                                        max_retrieve_len=128,
-                                        n_heads=8,
-                                        n_layers=2,
-                                        dropout=0.2,
-                                        freeze_encoder=True)
+                                    pred_dim=512,
+                                    num_classes=1,
+                                    pred_time=args.pred_time,
+                                    max_retrieve_len=128,
+                                    n_heads=8,
+                                    n_layers=2,
+                                    dropout=0.2,
+                                    freeze_encoder=True)
         model = REMedLightningModule(model=remed_genhpf,
-                                        lr=learning_rate,
-                                        wd=weight_decay,
-                                        max_epochs=75,
-                                        pos_weight=1.0,
-                                        freeze_encoder=True,
-                                        use_warmup=False,
-                                        warmup_steps=500,
-                                        num_classes=1,
-                                        prediction_csv_path=prediction_csv_path)
+                                    lr=learning_rate,
+                                    wd=weight_decay,
+                                    max_epochs=75,
+                                    pos_weight=1.0,
+                                    freeze_encoder=True,
+                                    use_warmup=False,
+                                    warmup_steps=500,
+                                    num_classes=1,
+                                    prediction_csv_path=prediction_csv_path)
     train_dataloader = DataLoader(dataset=train_dataset,
                                 batch_size=args.batch_size,
-                                num_workers=8,
+                                num_workers=24,
                                 shuffle=True,
                                 collate_fn=collate_fn,
                                 pin_memory=True,
                                 persistent_workers=True,
+                                pin_memory_device='cuda',
                                 prefetch_factor=4)
     val_dataloader = DataLoader(dataset=val_dataset,
                                 batch_size=args.batch_size,
-                                num_workers=8,
+                                num_workers=24,
                                 shuffle=False,
                                 collate_fn=collate_fn,
                                 pin_memory=True,
                                 persistent_workers=True,
+                                pin_memory_device='cuda',
                                 prefetch_factor=4)
     test_dataloader = DataLoader(dataset=test_dataset,
                                 batch_size=args.batch_size,
-                                num_workers=8,
+                                num_workers=24,
                                 shuffle=False,
                                 collate_fn=collate_fn,
                                 pin_memory=True,
                                 persistent_workers=True,
+                                pin_memory_device='cuda',
                                 prefetch_factor=4)
-
 
     checkpoint_callback = ModelCheckpoint(dirpath=ckpt_dir,
                                             monitor='val_loss',
@@ -1351,12 +1350,11 @@ elif args.run_mode == 'eval':
                                             every_n_epochs=1,
                                             save_top_k=1)
     early_stop = EarlyStopping(monitor='val_loss',
-                                min_delta=0.001,
-                                mode='min', 
-                                patience=3)
+                            min_delta=0.001,
+                            mode='min', 
+                            patience=5)
 
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
-
     torch.set_float32_matmul_precision('high')
 
     if torch.cuda.is_available():
@@ -1374,8 +1372,9 @@ elif args.run_mode == 'eval':
                         max_epochs=75,
                         precision=precision,
                         callbacks=[early_stop,lr_monitor, checkpoint_callback],
-                        enable_checkpointing=True
+                        enable_checkpointing=True,
+                        # deterministic=True
                         )
     trainer.logger.log_hyperparams(hparams)
     trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloader)
-    trainer.test(model=model, dataloaders=test_dataloader, ckpt_path='best')
+    trainer.test(model=model, dataloaders=test_dataloader, ckpt_path='best', weights_only=False)

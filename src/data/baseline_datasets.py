@@ -725,22 +725,36 @@ class CausalLMDataCollator:
 #########################################################
 
 
+from typing import List, Dict, Any
+import torch
+
 class HiBEHRTEvalCollator:
     def __init__(self, seq_gen, chunk_length: int = 256, overlap: int = 32, add_cls_per_chunk: bool = True):
         self.seq_gen = seq_gen
         self.chunk_length = chunk_length
         self.overlap = overlap
         self.add_cls_per_chunk = add_cls_per_chunk
+        self.metadata_keys = {"subject_id", "hadm_id", "icustay_id"}
 
     def __call__(self, batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
 
         chunked_per_patient = []
         labels = []
+        metadata = {k: [] for k in self.metadata_keys}
 
         for sample in batch:
             labels.append(sample["label"])
 
-            timeline = {k: v for k, v in sample.items() if k != "label"}
+            # 1. Collect metadata separately
+            for m_key in self.metadata_keys:
+                if m_key in sample:
+                    metadata[m_key].append(sample[m_key])
+
+            # 2. Exclude metadata from sequence chunking
+            timeline = {
+                k: v for k, v in sample.items() 
+                if k != "label" and k not in self.metadata_keys
+            }
 
             chunks = self.seq_gen.get_overlapped_chunks(
                 timeline=timeline,
@@ -755,6 +769,7 @@ class HiBEHRTEvalCollator:
         keys = list(chunked_per_patient[0][0].keys())
 
         out = {}
+        # 3. Stack chunked sequence tensors
         for k in keys:
             per_patient_tensors = []
             for chunks in chunked_per_patient:
@@ -765,6 +780,11 @@ class HiBEHRTEvalCollator:
                 per_patient_tensors.append(torch.stack(tensors, dim=0))  
             out[k] = torch.stack(per_patient_tensors, dim=0)  
 
+        # 4. Attach label and metadata tensors to final output
         out["label"] = torch.as_tensor(labels)
+
+        for m_key, values in metadata.items():
+            if values:
+                out[m_key] = torch.tensor(values)
 
         return out

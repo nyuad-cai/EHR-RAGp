@@ -30,7 +30,7 @@ This code works on top of already extracted MIMIC-IV in MEDS format.
     12. Build a readily tokenized full dataset (Arrow format)
     13. Downstream cohort filtering
     14. Ground truth labels extraction for downstreak tasks
-    15. Query/History boundaries identification  
+    15. Query/History boundaries identification and leakage prevention
 """
 
 
