@@ -1,4 +1,4 @@
-# EHR-RAGp: Retrieval-Augmented Prototype-Guided Foundation Model for Electronic Health Records
+# EHR-RAGp: Prototype-Guided Retrieval of Longitudinal Electronic Health Records for Clinical Prediction Models
 
 <p align="center">
   <img src="assets/main-figure.png" alt="Overview of the EHR-RAGp framework" width="95%">
