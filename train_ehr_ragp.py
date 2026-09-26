@@ -199,7 +199,6 @@ def objective(trial: optuna.trial.Trial) -> float:
         run_dir = get_run_dir(wandb_logger)         
         ckpt_dir = os.path.join(run_dir, "ckpt")
         make_dir(ckpt_dir)
-        prediction_csv_path = os.path.join(ckpt_dir,"test_predictions.csv")
 
         if args.benchmark == "mimic":
             train_dataset = RetrievalDataset(data_idx_path=args.data_idx_path,
