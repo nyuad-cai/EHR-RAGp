@@ -676,7 +676,7 @@ if args.run_mode == 'hparams':
 
     study = optuna.create_study(study_name=args.backbone_name,
                                 direction="minimize", 
-                                storage=f'sqlite:////scratch/sas10092/ehr-foundation/models/optuna_dbs/{args.backbone_name}_{mode}_{args.task}.db',
+                                storage=f'sqlite:////scratch/xxxx-1/ehr-foundation/models/optuna_dbs/{args.backbone_name}_{mode}_{args.task}.db',
                                 pruner=pruner,
                                 load_if_exists=True,
                                 sampler=TPESampler(n_startup_trials=5))
