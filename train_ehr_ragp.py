@@ -423,13 +423,13 @@ def main():
     retrieval_status = "uniform" if args.uniform else None
 
     if args.variant is not None:
-        db_path = f'sqlite:////scratch/sas10092/ehr-foundation/models/ehr_ragp_dbs/{args.backbone_name}_{args.variant}_{prot_status}_{args.task}_{args.span}_{args.chunking_strategy}.db'
+        db_path = f'sqlite:////scratch/xxxx-1/ehr-foundation/models/ehr_ragp_dbs/{args.backbone_name}_{args.variant}_{prot_status}_{args.task}_{args.span}_{args.chunking_strategy}.db'
 
     elif args.uniform:
-        db_path = f'sqlite:////scratch/sas10092/ehr-foundation/models/ehr_ragp_dbs/{args.backbone_name}_{retrieval_status}_{prot_status}_{args.task}_{args.span}_{args.chunking_strategy}.db'
+        db_path = f'sqlite:////scratch/xxxx-1/ehr-foundation/models/ehr_ragp_dbs/{args.backbone_name}_{retrieval_status}_{prot_status}_{args.task}_{args.span}_{args.chunking_strategy}.db'
     else:
         args.variant = None
-        db_path = f'sqlite:////scratch/sas10092/ehr-foundation/models/ehr_ragp_dbs/{args.backbone_name}_{prot_status}_{args.task}_{args.span}_{args.chunking_strategy}.db'
+        db_path = f'sqlite:////scratch/xxxx-1/ehr-foundation/models/ehr_ragp_dbs/{args.backbone_name}_{prot_status}_{args.task}_{args.span}_{args.chunking_strategy}.db'
 
     study = optuna.create_study(study_name=args.backbone_name,
                                 direction="minimize", 
