@@ -19,7 +19,7 @@
 
 
 
-OVERLAY=/scratch/sas10092/ehr-foundation/overlay-512000M-15000K.ext3
+OVERLAY=/scratch/xxxx-1/ehr-foundation/overlay-512000M-15000K.ext3
 SIF=/share/apps/admin/singularity-images/centos-8.2.2004.sif
 
 # common settings 
