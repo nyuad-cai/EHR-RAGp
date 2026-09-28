@@ -78,11 +78,11 @@ BACKBONE=roberta
 SEQ_LENGTH_Q=512
 OVERLAP_Q=0
 singularity exec --nv --overlay "${OVERLAY}:ro" "${SIF}" bash -lc "
-  source /share/apps/NYUAD5/miniconda/3-4.11.0/etc/profile.d/conda.sh
+  source /share/apps/xxxx-3/miniconda/3-4.11.0/etc/profile.d/conda.sh
   conda activate ehr-ragp
   set -x
   umask 0002
-  cd /scratch/sas10092/ehr-foundation
+  cd /scratch/xxxx-1/ehr-foundation
   torchrun --master_port=$((20000 + (SLURM_JOB_ID % 20000))) --nproc_per_node=1 train_ehr_ragp.py \
     --backbone-name ${BACKBONE} \
     --job-id ${SLURM_JOB_ID} \
