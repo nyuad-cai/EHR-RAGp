@@ -324,7 +324,7 @@ def objective(trial: optuna.trial.Trial) -> float:
             model_name = 'StanfordShahLab/clmbr-t-base'
             clmbr_model = femr.models.transformer.FEMRModel.from_pretrained(model_name)
             for p in clmbr_model.parameters():
-                p.requires_grad = True
+                p.requires_grad = False
             # tokenizer = femr.models.tokenizer.FEMRTokenizer(dictionary=dictionary,ontology=None)
             # batch_processor = femr.models.processor.FEMRBatchProcessor(tokenizer)
 
